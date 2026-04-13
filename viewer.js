@@ -422,7 +422,7 @@ const Renderer = {
           const cell = cv.parentElement;
           cv.width  = cell.clientWidth;
           cv.height = cell.clientHeight;
-          this.draw(p, o);
+          this.renderAll();  // re-render all to maintain uniform scale
         });
         ro.observe(cv.parentElement);
         this.ros[key] = ro;
@@ -432,21 +432,46 @@ const Renderer = {
 
   _rafId: null,
 
+  // Compute a uniform pixels-per-mm scale that fits all visible orientations
+  _uniformScale() {
+    if (!S.ctVolume || S.viewMode !== 'all') return null; // only unify in 3x3 mode
+
+    const ps = S.pixelSpacing, ss = S.sliceSpacing;
+    const { nx, ny, nz } = S;
+    let minFit = Infinity;
+
+    ORIENTS.forEach(orient => {
+      const cv = this.cvs[`A-${orient}`];
+      if (!cv || cv.width < 4 || cv.height < 4) return;
+      const W = cv.width, H = cv.height;
+
+      let physW, physH;
+      if (orient === 'axial')        { physW = nx * ps[1]; physH = ny * ps[0]; }
+      else if (orient === 'coronal') { physW = nx * ps[1]; physH = nz * ss; }
+      else                           { physW = ny * ps[0]; physH = nz * ss; }
+
+      const fit = Math.min(W / physW, H / physH);
+      if (fit < minFit) minFit = fit;
+    });
+
+    return isFinite(minFit) ? minFit : null;
+  },
+
   renderAll() {
     if (this._rafId) cancelAnimationFrame(this._rafId);
     this._rafId = requestAnimationFrame(() => {
       this._rafId = null;
+      const uniformFit = this._uniformScale();
       PLANS.forEach(p => {
-        // Skip minimized plans
         const row = document.getElementById(`row-${p}`);
         if (row && row.classList.contains('minimized')) return;
-        ORIENTS.forEach(o => this.draw(p, o));
+        ORIENTS.forEach(o => this.draw(p, o, uniformFit));
       });
       DVH.render();
     });
   },
 
-  draw(plan, orient) {
+  draw(plan, orient, uniformFit) {
     const key = `${plan}-${orient}`;
     const cv  = this.cvs[key];
     const ctx = this.ctxs[key];
@@ -534,33 +559,50 @@ const Renderer = {
       }
     }
 
-    // Blit to canvas with zoom/pan
+    // Blit to canvas with zoom/pan — use physical mm for consistent magnification
     const oc = new OffscreenCanvas(sliceW, sliceH);
     oc.getContext('2d').putImageData(imgData, 0, 0);
 
+    // Physical dimensions of this slice in mm
+    const ps = S.pixelSpacing;  // [row_spacing, col_spacing]
+    const ss = S.sliceSpacing;
+    let physW, physH;
+    if (orient === 'axial')        { physW = sliceW * ps[1]; physH = sliceH * ps[0]; }
+    else if (orient === 'coronal') { physW = sliceW * ps[1]; physH = sliceH * ss; }
+    else                           { physW = sliceW * ps[0]; physH = sliceH * ss; }
+
     const vs = S.views[plan][orient];
-    const scale = Math.min(W / sliceW, H / sliceH) * vs.zoom;
-    const ox = (W - sliceW * scale) / 2 + vs.panX;
-    const oy = (H - sliceH * scale) / 2 + vs.panY;
+    // Use uniform scale across orientations (in 3x3 mode) for consistent magnification
+    // Apply 1.6x default boost so images fill more of the cells
+    const baseFit = uniformFit || Math.min(W / physW, H / physH);
+    const fitScale = baseFit * vs.zoom * 1.6;
+    const drawW = physW * fitScale;
+    const drawH = physH * fitScale;
+    const ox = (W - drawW) / 2 + vs.panX;
+    const oy = (H - drawH) / 2 + vs.panY;
+
+    // Per-voxel scale factors (for overlays that work in voxel coords)
+    const sxVox = drawW / sliceW;  // canvas pixels per voxel in x
+    const syVox = drawH / sliceH;  // canvas pixels per voxel in y
 
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(oc, ox, oy, sliceW * scale, sliceH * scale);
+    ctx.drawImage(oc, ox, oy, drawW, drawH);
 
     // Isodose lines
     if (S.doseVisible) {
       S.isodoseLines.forEach(iso => {
         if (iso.visible) {
           drawIsodose(ctx, plan, orient, si, iso.level, iso.color,
-                      sliceW, sliceH, scale, ox, oy);
+                      sliceW, sliceH, sxVox, syVox, ox, oy);
         }
       });
     }
 
     // Structure contours (all orientations)
-    drawStructures(ctx, plan, orient, si, scale, ox, oy);
+    drawStructures(ctx, plan, orient, si, sxVox, syVox, ox, oy);
 
     // Crosshair
-    drawCrosshair(ctx, plan, orient, sliceW, sliceH, scale, ox, oy, W, H);
+    drawCrosshair(ctx, plan, orient, sliceW, sliceH, sxVox, syVox, ox, oy, W, H);
 
     // Position label
     const el = document.getElementById(`pos-${plan}-${orient}`);
@@ -578,13 +620,12 @@ const Renderer = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Isodose Contours
 // ─────────────────────────────────────────────────────────────────────────────
-function drawIsodose(ctx, plan, orient, si, level, color, sliceW, sliceH, scale, ox, oy) {
+function drawIsodose(ctx, plan, orient, si, level, color, sliceW, sliceH, sxVox, syVox, ox, oy) {
   const { nx, ny, nz } = S;
   const dose = S.doseVols[plan];
   if (!dose) return;
   const threshold = level * S.doseMaxGy;
 
-  // Direct array lookup using same indexing as CT
   let getV;
   if (orient === 'axial') {
     getV = (x, y) => dose[si * ny * nx + y * nx + x];
@@ -607,9 +648,10 @@ function drawIsodose(ctx, plan, orient, si, level, color, sliceW, sliceH, scale,
         (getV(x+1, y+1) > threshold ? 8 : 0);
       if (code === 0 || code === 15) continue;
 
-      const x0 = ox + x * scale, y0 = oy + y * scale, s = scale, h = s / 2;
-      const T = [x0+h, y0  ], B = [x0+h, y0+s];
-      const L = [x0,   y0+h], R = [x0+s, y0+h];
+      const x0 = ox + x * sxVox, y0 = oy + y * syVox;
+      const hx = sxVox / 2, hy = syVox / 2;
+      const T = [x0+hx, y0     ], B = [x0+hx, y0+syVox];
+      const L = [x0,    y0+hy  ], R = [x0+sxVox, y0+hy];
 
       const segs = {
         1:[...L,...T], 2:[...T,...R], 3:[...L,...R], 4:[...L,...B],
@@ -627,45 +669,41 @@ function drawIsodose(ctx, plan, orient, si, level, color, sliceW, sliceH, scale,
 // ─────────────────────────────────────────────────────────────────────────────
 // Structure Contours (all orientations)
 // ─────────────────────────────────────────────────────────────────────────────
-function drawStructures(ctx, plan, orient, si, scale, ox, oy) {
+function drawStructures(ctx, plan, orient, si, sxVox, syVox, ox, oy) {
   const structs = S.structures[plan] || [];
 
   structs.forEach(st => {
-    // Check visibility from the combined structure list
     const listEntry = S.structureList.find(s => s.name === st.name);
     if (listEntry && !listEntry.visible) return;
     if (!st.visible) return;
 
     if (orient === 'axial') {
-      // Draw contours on matching axial slices
       st.contourSlices.forEach(cs => {
         if (cs.z === si) {
-          drawPoly(ctx, cs.poly, st.color, scale, ox, oy);
+          drawPoly(ctx, cs.poly, st.color, sxVox, syVox, ox, oy);
         }
       });
     } else {
-      // For coronal/sagittal: find contours that cross this slice
-      // and draw the intersection points as a connected line
-      drawStructureCrossSection(ctx, st, orient, si, scale, ox, oy);
+      drawStructureCrossSection(ctx, st, orient, si, sxVox, syVox, ox, oy);
     }
   });
 }
 
-function drawStructureCrossSection(ctx, struct, orient, si, scale, ox, oy) {
-  // For each axial contour slice, compute where the polygon edges cross
-  // the coronal (y=si) or sagittal (x=si) plane. This produces pairs of
-  // intersection points per slice, which we draw as horizontal line segments.
+function drawStructureCrossSection(ctx, struct, orient, si, sxVox, syVox, ox, oy) {
+  // For each axial contour slice, find where polygon edges intersect
+  // the cutting plane. Draw a short vertical tick at each crossing point.
+  // This works correctly for any structure shape (convex, concave, multi-region).
   const { nz } = S;
+  const TICK_H = syVox * 0.8;  // tick height = ~80% of one slice spacing
 
   ctx.strokeStyle = struct.color;
   ctx.lineWidth = 1.5;
-  ctx.setLineDash([4, 2]);
+  ctx.beginPath();
 
   struct.contourSlices.forEach(cs => {
     const poly = cs.poly;
     if (!poly || poly.length < 3) return;
 
-    // Find all intersection points of the polygon with the cutting plane
     const crossings = [];
 
     for (let i = 0; i < poly.length; i++) {
@@ -673,54 +711,41 @@ function drawStructureCrossSection(ctx, struct, orient, si, scale, ox, oy) {
       const b = poly[(i + 1) % poly.length];
 
       if (orient === 'coronal') {
-        // Cutting plane: y = si (in voxel coords)
         if ((a.y <= si && b.y > si) || (b.y <= si && a.y > si)) {
           const frac = (si - a.y) / (b.y - a.y);
-          const xCross = a.x + frac * (b.x - a.x);
-          crossings.push(xCross);
+          crossings.push(a.x + frac * (b.x - a.x));
         }
       } else {
-        // Sagittal: cutting plane: x = si
         if ((a.x <= si && b.x > si) || (b.x <= si && a.x > si)) {
           const frac = (si - a.x) / (b.x - a.x);
-          const yCross = a.y + frac * (b.y - a.y);
-          crossings.push(yCross);
+          crossings.push(a.y + frac * (b.y - a.y));
         }
       }
     }
 
-    if (crossings.length < 2) return;
-    crossings.sort((a, b) => a - b);
+    if (crossings.length < 1) return;
 
-    // Draw pairs of crossings as line segments at this z level
-    const screenY = oy + (nz - 1 - cs.z) * scale;
+    const screenY = oy + (nz - 1 - cs.z) * syVox;
 
-    for (let i = 0; i < crossings.length - 1; i += 2) {
-      const x1 = orient === 'coronal'
-        ? ox + crossings[i] * scale
-        : ox + crossings[i] * scale;
-      const x2 = orient === 'coronal'
-        ? ox + crossings[i + 1] * scale
-        : ox + crossings[i + 1] * scale;
-
-      ctx.beginPath();
-      ctx.moveTo(x1, screenY);
-      ctx.lineTo(x2, screenY);
-      ctx.stroke();
-    }
+    // Draw a vertical tick mark at each crossing point
+    crossings.forEach(c => {
+      const screenX = ox + c * sxVox;
+      ctx.moveTo(screenX, screenY - TICK_H / 2);
+      ctx.lineTo(screenX, screenY + TICK_H / 2);
+    });
   });
 
-  ctx.setLineDash([]);
+  ctx.stroke();
 }
 
-function drawPoly(ctx, poly, color, scale, ox, oy) {
+function drawPoly(ctx, poly, color, sxVox, syVox, ox, oy) {
   if (!poly || poly.length < 2) return;
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 2]);
   ctx.beginPath();
   poly.forEach((pt, i) => {
-    const sx = ox + pt.x * scale, sy = oy + pt.y * scale;
+    const sx = ox + pt.x * sxVox, sy = oy + pt.y * syVox;
     i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
   });
   ctx.closePath();
@@ -731,7 +756,7 @@ function drawPoly(ctx, poly, color, scale, ox, oy) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Crosshair
 // ─────────────────────────────────────────────────────────────────────────────
-function drawCrosshair(ctx, plan, orient, sliceW, sliceH, scale, ox, oy, W, H) {
+function drawCrosshair(ctx, plan, orient, sliceW, sliceH, sxVox, syVox, ox, oy, W, H) {
   const { nz } = S;
   const sAx  = S.getSlice(plan, 'axial');
   const sCor = S.getSlice(plan, 'coronal');
@@ -739,14 +764,14 @@ function drawCrosshair(ctx, plan, orient, sliceW, sliceH, scale, ox, oy, W, H) {
 
   let cx, cy;
   if (orient === 'axial') {
-    cx = ox + sSag * scale;
-    cy = oy + sCor * scale;
+    cx = ox + sSag * sxVox;
+    cy = oy + sCor * syVox;
   } else if (orient === 'coronal') {
-    cx = ox + sSag * scale;
-    cy = oy + (nz - 1 - sAx) * scale;
+    cx = ox + sSag * sxVox;
+    cy = oy + (nz - 1 - sAx) * syVox;
   } else {
-    cx = ox + sCor * scale;
-    cy = oy + (nz - 1 - sAx) * scale;
+    cx = ox + sCor * sxVox;
+    cy = oy + (nz - 1 - sAx) * syVox;
   }
 
   ctx.strokeStyle = 'rgba(120,190,255,0.5)';
@@ -926,42 +951,176 @@ function setMaximized(plan) {
 const Interaction = {
   drag: null,
 
+  // Determine which crosshair line the mouse is near (if any).
+  // Returns { targetOrient, axis } or null.
+  _nearCrosshair(plan, orient, e, cv) {
+    const { nx, ny, nz } = S;
+    const W = cv.width, H = cv.height;
+    const ps = S.pixelSpacing, ss = S.sliceSpacing;
+
+    let sliceW, sliceH, physW, physH;
+    if (orient === 'axial')        { sliceW = nx; sliceH = ny; physW = nx * ps[1]; physH = ny * ps[0]; }
+    else if (orient === 'coronal') { sliceW = nx; sliceH = nz; physW = nx * ps[1]; physH = nz * ss; }
+    else                           { sliceW = ny; sliceH = nz; physW = ny * ps[0]; physH = nz * ss; }
+
+    const vs = S.views[plan][orient];
+    const uniformFit = Renderer._uniformScale();
+    const baseFit = uniformFit || Math.min(W / physW, H / physH);
+    const fitScale = baseFit * vs.zoom;
+    const drawW = physW * fitScale;
+    const drawH = physH * fitScale;
+    const ox = (W - drawW) / 2 + vs.panX;
+    const oy = (H - drawH) / 2 + vs.panY;
+    const sxVox = drawW / sliceW;
+    const syVox = drawH / sliceH;
+
+    const rect = cv.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const sAx  = S.getSlice(plan, 'axial');
+    const sCor = S.getSlice(plan, 'coronal');
+    const sSag = S.getSlice(plan, 'sagittal');
+
+    let hx, hy;
+    if (orient === 'axial') {
+      hx = ox + sSag * sxVox;
+      hy = oy + sCor * syVox;
+    } else if (orient === 'coronal') {
+      hx = ox + sSag * sxVox;
+      hy = oy + (nz - 1 - sAx) * syVox;
+    } else {
+      hx = ox + sCor * sxVox;
+      hy = oy + (nz - 1 - sAx) * syVox;
+    }
+
+    const GRAB_PX = 8;
+
+    if (Math.abs(mx - hx) < GRAB_PX) {
+      if (orient === 'axial') return { targetOrient: 'sagittal', axis: 'x', scale: sxVox, ox };
+      if (orient === 'coronal') return { targetOrient: 'sagittal', axis: 'x', scale: sxVox, ox };
+      if (orient === 'sagittal') return { targetOrient: 'coronal', axis: 'x', scale: sxVox, ox };
+    }
+    if (Math.abs(my - hy) < GRAB_PX) {
+      if (orient === 'axial') return { targetOrient: 'coronal', axis: 'y', scale: syVox, oy };
+      if (orient === 'coronal') return { targetOrient: 'axial', axis: 'y', scale: syVox, oy, invert: true };
+      if (orient === 'sagittal') return { targetOrient: 'axial', axis: 'y', scale: syVox, oy, invert: true };
+    }
+    return null;
+  },
+
   init() {
     PLANS.forEach(plan => {
       ORIENTS.forEach(orient => {
         const cv = document.getElementById(`cv-${plan}-${orient}`);
 
+        // ── Mouse wheel: always scrolls slices ──
         cv.addEventListener('wheel', e => {
           e.preventDefault();
           const delta = e.deltaY > 0 ? 1 : -1;
+          const cur = S.getSlice(plan, orient);
+          S.setSlice(plan, orient, cur + delta);
+          if (S.linked) Renderer.renderAll();
+          else { ORIENTS.forEach(o => Renderer.draw(plan, o)); }
+        }, { passive: false });
+
+        // ── Mouse down ──
+        cv.addEventListener('mousedown', e => {
+          e.preventDefault();
+
+          if (S.activeTool === 'scroll') {
+            // Check if near a crosshair — if so, grab it
+            const hit = this._nearCrosshair(plan, orient, e, cv);
+            if (hit) {
+              this.drag = {
+                type: 'crosshair', plan, orient,
+                targetOrient: hit.targetOrient,
+                axis: hit.axis,
+                scale: hit.scale,
+                offset: hit.axis === 'x' ? hit.ox : hit.oy,
+                invert: hit.invert || false,
+                x0: e.clientX, y0: e.clientY,
+              };
+              cv.style.cursor = hit.axis === 'x' ? 'col-resize' : 'row-resize';
+              return;
+            }
+          }
 
           if (S.activeTool === 'zoom') {
-            const vs = S.views[plan][orient];
-            vs.zoom = Math.max(0.4, Math.min(12, vs.zoom * (delta > 0 ? 0.9 : 1.1)));
-            if (S.linked) {
-              PLANS.forEach(p => { S.views[p][orient].zoom = vs.zoom; });
+            this.drag = {
+              type: 'zoom', plan, orient,
+              y0: e.clientY,
+              zoom0: S.views[plan][orient].zoom,
+            };
+            cv.style.cursor = 'ns-resize';
+            return;
+          }
+
+          if (S.activeTool === 'pan') {
+            this.drag = {
+              type: 'pan', plan, orient,
+              x0: e.clientX, y0: e.clientY,
+              panX0: S.views[plan][orient].panX,
+              panY0: S.views[plan][orient].panY,
+            };
+            cv.style.cursor = 'grabbing';
+            return;
+          }
+        });
+
+        // ── Mouse move ──
+        cv.addEventListener('mousemove', e => {
+          // Update cursor when not dragging
+          if (!this.drag) {
+            if (S.activeTool === 'scroll') {
+              const hit = this._nearCrosshair(plan, orient, e, cv);
+              cv.style.cursor = hit
+                ? (hit.axis === 'x' ? 'col-resize' : 'row-resize')
+                : 'crosshair';
+            } else if (S.activeTool === 'zoom') {
+              cv.style.cursor = 'ns-resize';
+            } else if (S.activeTool === 'pan') {
+              cv.style.cursor = 'grab';
             }
-            Renderer.renderAll();
-          } else {
-            const cur = S.getSlice(plan, orient);
-            S.setSlice(plan, orient, cur + delta);
+            return;
+          }
+
+          if (this.drag.plan !== plan || this.drag.orient !== orient) return;
+
+          if (this.drag.type === 'crosshair') {
+            // Drag crosshair to scroll the target orientation
+            const { targetOrient, axis, scale, offset, invert } = this.drag;
+            const rect = cv.getBoundingClientRect();
+            const pos = axis === 'x'
+              ? (e.clientX - rect.left - offset) / scale
+              : (e.clientY - rect.top - offset) / scale;
+
+            let sliceVal;
+            if (invert) {
+              // For axial from coronal/sagittal: y-axis is inverted (nz-1-slice)
+              sliceVal = Math.round(S.nz - 1 - pos);
+            } else {
+              sliceVal = Math.round(pos);
+            }
+
+            S.setSlice(plan, targetOrient, sliceVal);
             if (S.linked) Renderer.renderAll();
             else { ORIENTS.forEach(o => Renderer.draw(plan, o)); }
           }
-        }, { passive: false });
 
-        cv.addEventListener('mousedown', e => {
-          this.drag = {
-            plan, orient,
-            x0: e.clientX, y0: e.clientY,
-            panX0: S.views[plan][orient].panX,
-            panY0: S.views[plan][orient].panY,
-          };
-        });
+          else if (this.drag.type === 'zoom') {
+            // Drag up = zoom in, drag down = zoom out
+            const dy = this.drag.y0 - e.clientY; // positive = up = zoom in
+            const factor = Math.exp(dy * 0.005); // smooth exponential zoom
+            const newZoom = Math.max(0.3, Math.min(20, this.drag.zoom0 * factor));
+            S.views[plan][orient].zoom = newZoom;
+            if (S.linked) {
+              PLANS.forEach(p => { S.views[p][orient].zoom = newZoom; });
+            }
+            Renderer.renderAll();
+          }
 
-        cv.addEventListener('mousemove', e => {
-          if (!this.drag || this.drag.plan !== plan || this.drag.orient !== orient) return;
-          if (S.activeTool === 'pan') {
+          else if (this.drag.type === 'pan') {
             const dx = e.clientX - this.drag.x0;
             const dy = e.clientY - this.drag.y0;
             S.views[plan][orient].panX = this.drag.panX0 + dx;
@@ -971,15 +1130,21 @@ const Interaction = {
                 S.views[p][orient].panX = S.views[plan][orient].panX;
                 S.views[p][orient].panY = S.views[plan][orient].panY;
               });
-              Renderer.renderAll();
-            } else {
-              ORIENTS.forEach(o => Renderer.draw(plan, o));
             }
+            Renderer.renderAll();
           }
         });
 
-        cv.addEventListener('mouseup', () => { this.drag = null; });
-        cv.addEventListener('mouseleave', () => { this.drag = null; });
+        // ── Mouse up / leave ──
+        const endDrag = () => {
+          if (this.drag) {
+            cv.style.cursor = S.activeTool === 'pan' ? 'grab'
+              : S.activeTool === 'zoom' ? 'ns-resize' : 'crosshair';
+          }
+          this.drag = null;
+        };
+        cv.addEventListener('mouseup', endDrag);
+        cv.addEventListener('mouseleave', endDrag);
       });
 
       // Maximize button
