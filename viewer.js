@@ -32,17 +32,21 @@ const S = {
   ww: 400, wl: 40,
   doseVisible: true,
   doseOpacity: 0.50,
-  doseLoPct: 5,     // lower bound as % of max dose — below this, no wash shown
-  doseHiPct: 100,   // upper bound as % of max dose — above this, saturate
+  doseLo: 5,        // lower bound (in current unit — % or Gy)
+  doseHi: 100,      // upper bound (in current unit — % or Gy)
+  doseMode: 'rel',  // 'rel' = % of RX, 'abs' = Gy
+  rxTotalDoseGy: null,  // prescription total dose (set from manifest)
+  rxFractionDoseGy: null,
+  rxNumFractions: null,
 
   viewMode: 'all',  // 'all', 'axial', 'coronal', 'sagittal'
 
   isodoseLines: [
-    { level: 0.95, color: '#ff3333', visible: true },
-    { level: 0.80, color: '#ff9900', visible: true },
-    { level: 0.60, color: '#ffff00', visible: true },
-    { level: 0.40, color: '#00ccff', visible: true },
-    { level: 0.20, color: '#0044ff', visible: true },
+    { level: 0.95, color: '#ff3333', visible: false },
+    { level: 0.80, color: '#ff9900', visible: false },
+    { level: 0.60, color: '#ffff00', visible: false },
+    { level: 0.40, color: '#00ccff', visible: false },
+    { level: 0.20, color: '#0044ff', visible: false },
   ],
 
   structures: { A: [], B: [], C: [] },   // per-plan structure arrays
@@ -120,18 +124,21 @@ const DataLoader = {
   async loadSubjectData(site, subject, onProgress) {
     const base = `SITES/${site}/${subject}/_processed`;
 
+    // Cache-buster to ensure fresh data
+    const cb = `?_=${Date.now()}`;
+
     // 1. Load manifest
     onProgress('Loading manifest...', 5);
-    const manifestResp = await fetch(`${base}/manifest.json`);
+    const manifestResp = await fetch(`${base}/manifest.json${cb}`);
     if (!manifestResp.ok) throw new Error('No manifest.json found. Run the admin tool first.');
     const manifest = await manifestResp.json();
 
     // 2. Load CT volume
     onProgress('Loading CT volume...', 15);
-    const ctMetaResp = await fetch(`${base}/ct_meta.json`);
+    const ctMetaResp = await fetch(`${base}/ct_meta.json${cb}`);
     const ctMeta = await ctMetaResp.json();
 
-    const ctBinResp = await fetch(`${base}/ct_volume.bin.gz`);
+    const ctBinResp = await fetch(`${base}/ct_volume.bin.gz${cb}`);
     const ctCompressed = new Uint8Array(await ctBinResp.arrayBuffer());
     onProgress('Decompressing CT...', 30);
     const ctRaw = pako.ungzip(ctCompressed);
@@ -249,6 +256,18 @@ function applyLoadedData(data) {
   });
   S.doseMaxGy = Math.ceil(maxDose * 1.05);
 
+  // Prescription dose from manifest
+  const rx = manifest.prescriptionDose;
+  if (rx) {
+    S.rxFractionDoseGy = rx.fractionDoseGy;
+    S.rxNumFractions = rx.numFractions;
+    S.rxTotalDoseGy = rx.totalDoseGy;
+  } else {
+    S.rxFractionDoseGy = null;
+    S.rxNumFractions = null;
+    S.rxTotalDoseGy = null;
+  }
+
   // Resample dose grids onto CT grid for fast rendering
   console.time('Dose resampling');
   resampleDoseToCtGrid();
@@ -297,7 +316,7 @@ function applyLoadedData(data) {
         S.structureList.push({
           name: st.templateName,
           color: st.templateColor,
-          visible: true,
+          visible: false,
         });
       }
     });
@@ -505,9 +524,10 @@ const Renderer = {
     const doseMax = S.doseMaxGy;
     const showDose = S.doseVisible && dose;
 
-    // Dose bounds in Gy
-    const doseLo = S.doseLoPct / 100 * doseMax;
-    const doseHi = S.doseHiPct / 100 * doseMax;
+    // Dose bounds in Gy — convert from current display unit
+    const refDose = S.rxTotalDoseGy || doseMax;
+    const doseLo = S.doseMode === 'rel' ? (S.doseLo / 100) * refDose : S.doseLo;
+    const doseHi = S.doseMode === 'rel' ? (S.doseHi / 100) * refDose : S.doseHi;
     const doseRange = doseHi - doseLo;
     const invDoseRange = doseRange > 0 ? 1 / doseRange : 0;
 
@@ -624,7 +644,9 @@ function drawIsodose(ctx, plan, orient, si, level, color, sliceW, sliceH, sxVox,
   const { nx, ny, nz } = S;
   const dose = S.doseVols[plan];
   if (!dose) return;
-  const threshold = level * S.doseMaxGy;
+  // Isodose level: in rel mode it's % of RX, in abs mode it's fraction of max dose
+  const refDose = S.rxTotalDoseGy || S.doseMaxGy;
+  const threshold = S.doseMode === 'rel' ? level * refDose : level * S.doseMaxGy;
 
   let getV;
   if (orient === 'axial') {
@@ -966,7 +988,7 @@ const Interaction = {
     const vs = S.views[plan][orient];
     const uniformFit = Renderer._uniformScale();
     const baseFit = uniformFit || Math.min(W / physW, H / physH);
-    const fitScale = baseFit * vs.zoom;
+    const fitScale = baseFit * vs.zoom * 1.6;  // must match the 1.6x boost in Renderer.draw
     const drawW = physW * fitScale;
     const drawH = physH * fitScale;
     const ox = (W - drawW) / 2 + vs.panX;
@@ -1017,7 +1039,7 @@ const Interaction = {
         // ── Mouse wheel: always scrolls slices ──
         cv.addEventListener('wheel', e => {
           e.preventDefault();
-          const delta = e.deltaY > 0 ? 1 : -1;
+          const delta = e.deltaY > 0 ? -1 : 1;  // scroll up = cranial (higher slice)
           const cur = S.getSlice(plan, orient);
           S.setSlice(plan, orient, cur + delta);
           if (S.linked) Renderer.renderAll();
@@ -1162,6 +1184,9 @@ const Interaction = {
 function renderIsodoseUI() {
   const tbody = document.getElementById('iso-tbody');
   tbody.innerHTML = '';
+  const refDose = S.rxTotalDoseGy || S.doseMaxGy;
+  const isRel = S.doseMode === 'rel';
+
   S.isodoseLines.forEach((iso, i) => {
     const tr = document.createElement('tr');
 
@@ -1175,13 +1200,33 @@ function renderIsodoseUI() {
     const tdL = document.createElement('td');
     const inp = document.createElement('input');
     inp.className = 'iso-lvl'; inp.type = 'number';
-    inp.min = 1; inp.max = 100; inp.value = Math.round(iso.level * 100);
-    inp.addEventListener('change', e => {
-      iso.level = Math.max(0.01, Math.min(1, +e.target.value / 100));
-      Renderer.renderAll();
-    });
+    inp.step = isRel ? '1' : '0.1';
+
+    if (isRel) {
+      // Display as % of RX
+      inp.min = 1; inp.max = 150;
+      inp.value = Math.round(iso.level * 100);
+      inp.addEventListener('change', e => {
+        iso.level = Math.max(0.01, Math.min(1.5, +e.target.value / 100));
+        Renderer.renderAll();
+      });
+    } else {
+      // Display as Gy
+      const isoGy = iso.level * refDose;
+      inp.min = 0; inp.max = Math.ceil(S.doseMaxGy);
+      inp.value = isoGy.toFixed(1);
+      inp.addEventListener('change', e => {
+        // Convert Gy back to fraction of refDose
+        iso.level = Math.max(0.001, +e.target.value / refDose);
+        Renderer.renderAll();
+      });
+    }
+
     tdL.appendChild(inp);
-    tdL.appendChild(Object.assign(document.createElement('span'), { textContent: '%', style: 'color:#555;font-size:10px' }));
+    const unitSpan = document.createElement('span');
+    unitSpan.textContent = isRel ? '%' : 'Gy';
+    unitSpan.style.cssText = 'color:#555;font-size:10px;margin-left:2px';
+    tdL.appendChild(unitSpan);
 
     const tdV = document.createElement('td');
     const eye = document.createElement('span');
@@ -1401,44 +1446,98 @@ function initControls() {
     Renderer.renderAll();
   });
 
-  // Dose
+  // Dose opacity
   document.getElementById('dop').addEventListener('input', e => {
     S.doseOpacity = e.target.value / 100;
     document.getElementById('dop-val').textContent = e.target.value;
     Renderer.renderAll();
   });
+
+  // Dose mode toggle (abs/rel)
+  const doseModeRel = document.getElementById('dose-mode-rel');
+  const doseModeAbs = document.getElementById('dose-mode-abs');
+
+  function setDoseMode(mode) {
+    S.doseMode = mode;
+    doseModeRel.classList.toggle('active', mode === 'rel');
+    doseModeAbs.classList.toggle('active', mode === 'abs');
+
+    const unit = mode === 'rel' ? '%' : ' Gy';
+    document.getElementById('dose-lo-unit').textContent = unit;
+    document.getElementById('dose-hi-unit').textContent = unit;
+    document.getElementById('iso-unit-label').textContent = mode === 'rel' ? '(% of RX)' : '(Gy)';
+
+    const refDose = S.rxTotalDoseGy || S.doseMaxGy;
+
+    if (mode === 'rel') {
+      // Convert current Gy values to % of RX
+      const loSlider = document.getElementById('dose-lo');
+      const hiSlider = document.getElementById('dose-hi');
+      loSlider.max = 150;
+      hiSlider.max = 150;
+      S.doseLo = 5;
+      S.doseHi = 100;
+    } else {
+      // Set to Gy values
+      const loSlider = document.getElementById('dose-lo');
+      const hiSlider = document.getElementById('dose-hi');
+      const maxGy = Math.ceil(S.doseMaxGy);
+      loSlider.max = maxGy;
+      hiSlider.max = maxGy;
+      S.doseLo = +(refDose * 0.05).toFixed(1);
+      S.doseHi = +refDose.toFixed(1);
+    }
+
+    // Sync UI
+    syncDoseBoundsUI();
+    renderIsodoseUI();
+    Renderer.renderAll();
+  }
+
+  function syncDoseBoundsUI() {
+    const loSlider = document.getElementById('dose-lo');
+    const loNum = document.getElementById('dose-lo-num');
+    const hiSlider = document.getElementById('dose-hi');
+    const hiNum = document.getElementById('dose-hi-num');
+    loSlider.value = S.doseLo;
+    loNum.value = S.doseLo;
+    hiSlider.value = S.doseHi;
+    hiNum.value = S.doseHi;
+    document.getElementById('dose-lo-val').textContent = S.doseLo;
+    document.getElementById('dose-hi-val').textContent = S.doseHi;
+  }
+
+  doseModeRel.addEventListener('click', () => setDoseMode('rel'));
+  doseModeAbs.addEventListener('click', () => setDoseMode('abs'));
+
   // Dose lower bound — sync slider and number input
-  const doseLo = document.getElementById('dose-lo');
+  const doseLoEl = document.getElementById('dose-lo');
   const doseLoNum = document.getElementById('dose-lo-num');
-  doseLo.addEventListener('input', e => {
-    S.doseLoPct = +e.target.value;
+  doseLoEl.addEventListener('input', e => {
+    S.doseLo = +e.target.value;
     doseLoNum.value = e.target.value;
     document.getElementById('dose-lo-val').textContent = e.target.value;
     Renderer.renderAll();
   });
   doseLoNum.addEventListener('change', e => {
-    const v = Math.max(0, Math.min(100, +e.target.value));
-    S.doseLoPct = v;
-    doseLo.value = v;
-    doseLoNum.value = v;
-    document.getElementById('dose-lo-val').textContent = v;
+    S.doseLo = +e.target.value;
+    doseLoEl.value = e.target.value;
+    document.getElementById('dose-lo-val').textContent = e.target.value;
     Renderer.renderAll();
   });
   // Dose upper bound
-  const doseHi = document.getElementById('dose-hi');
+  const doseHiEl = document.getElementById('dose-hi');
   const doseHiNum = document.getElementById('dose-hi-num');
-  doseHi.addEventListener('input', e => {
-    S.doseHiPct = +e.target.value;
+  doseHiEl.addEventListener('input', e => {
+    S.doseHi = +e.target.value;
     doseHiNum.value = e.target.value;
     document.getElementById('dose-hi-val').textContent = e.target.value;
     Renderer.renderAll();
   });
   doseHiNum.addEventListener('change', e => {
-    const v = Math.max(0, Math.min(100, +e.target.value));
-    S.doseHiPct = v;
-    doseHi.value = v;
-    doseHiNum.value = v;
-    document.getElementById('dose-hi-val').textContent = v;
+    S.doseHi = +e.target.value;
+    doseHiEl.value = e.target.value;
+    document.getElementById('dose-hi-val').textContent = e.target.value;
     Renderer.renderAll();
   });
   document.getElementById('dshow').addEventListener('change', e => {
@@ -1622,6 +1721,14 @@ async function initNavigation() {
 
       // Update UI
       document.getElementById('case-label').textContent = `${site} / ${subject}`;
+
+      // Display prescription dose
+      const rxLabel = document.getElementById('rx-label');
+      if (S.rxTotalDoseGy) {
+        rxLabel.textContent = `RX: ${S.rxFractionDoseGy} Gy x ${S.rxNumFractions} fx = ${S.rxTotalDoseGy} Gy`;
+      } else {
+        rxLabel.textContent = 'RX: not configured';
+      }
       document.getElementById('welcome-screen').classList.add('hidden');
       document.getElementById('body').style.display = 'flex';
 

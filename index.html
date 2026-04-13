@@ -576,6 +576,7 @@
 
   <div class="top-sep"></div>
   <span id="case-label">No subject loaded</span>
+  <span id="rx-label" style="font-size:11px;color:var(--yellow);white-space:nowrap"></span>
 
   <div style="flex:1"></div>
 
@@ -617,22 +618,26 @@
 
     <div class="sb-section">
       <h3>Dose Overlay</h3>
+      <div style="display:flex;gap:2px;margin-bottom:6px">
+        <button class="tool-btn active" id="dose-mode-rel" style="flex:1;text-align:center;margin:0;font-size:10px">% of RX</button>
+        <button class="tool-btn" id="dose-mode-abs" style="flex:1;text-align:center;margin:0;font-size:10px">Gy</button>
+      </div>
       <label class="ctrl">
         <span>Opacity: <b id="dop-val">50</b>%</span>
         <input type="range" id="dop" min="0" max="100" value="50">
       </label>
       <label class="ctrl">
-        <span>Lower: <b id="dose-lo-val">5</b>%</span>
+        <span>Lower: <b id="dose-lo-val">5</b><span id="dose-lo-unit">%</span></span>
         <div style="display:flex;gap:4px;align-items:center">
-          <input type="range" id="dose-lo" min="0" max="100" value="5" style="flex:1">
-          <input type="number" id="dose-lo-num" min="0" max="100" value="5" style="width:48px;padding:2px 4px;background:#2a2a2a;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px">
+          <input type="range" id="dose-lo" min="0" max="150" value="5" style="flex:1">
+          <input type="number" id="dose-lo-num" min="0" max="999" value="5" step="any" style="width:56px;padding:2px 4px;background:#2a2a2a;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px">
         </div>
       </label>
       <label class="ctrl">
-        <span>Upper: <b id="dose-hi-val">100</b>%</span>
+        <span>Upper: <b id="dose-hi-val">100</b><span id="dose-hi-unit">%</span></span>
         <div style="display:flex;gap:4px;align-items:center">
-          <input type="range" id="dose-hi" min="0" max="100" value="100" style="flex:1">
-          <input type="number" id="dose-hi-num" min="0" max="100" value="100" style="width:48px;padding:2px 4px;background:#2a2a2a;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px">
+          <input type="range" id="dose-hi" min="0" max="150" value="100" style="flex:1">
+          <input type="number" id="dose-hi-num" min="0" max="999" value="100" step="any" style="width:56px;padding:2px 4px;background:#2a2a2a;border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px">
         </div>
       </label>
       <label class="ctrl-row">
@@ -642,7 +647,7 @@
     </div>
 
     <div class="sb-section">
-      <h3>Isodose Lines</h3>
+      <h3>Isodose Lines <span id="iso-unit-label" style="font-size:9px;color:var(--text-dim);text-transform:none;letter-spacing:0">(% of RX)</span></h3>
       <div style="display:flex;gap:4px;margin-bottom:6px">
         <button class="tool-btn" id="iso-all-on" style="flex:1;text-align:center;margin:0">All On</button>
         <button class="tool-btn" id="iso-all-off" style="flex:1;text-align:center;margin:0">All Off</button>
@@ -816,6 +821,6 @@
 
 </div>
 
-<script src="viewer.js"></script>
+<script src="viewer.js?v=20260413c"></script>
 </body>
 </html>

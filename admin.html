@@ -458,10 +458,34 @@
     </div>
   </div>
 
-  <!-- Step 5: Identity Randomization & Export -->
+  <!-- Step 5: Prescription, Identity & Export -->
   <div class="panel hidden" id="panel-export">
-    <h2><span class="step-num">5</span> Identity Randomization & Export</h2>
-    <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+    <h2><span class="step-num">5</span> Prescription, Identity & Export</h2>
+
+    <h3 style="font-size:13px;font-weight:600;margin-bottom:8px">Prescription Dose</h3>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px">
+      Set the prescription dose for this subject. This will be shown to reviewers and used as the reference for relative dose display.
+    </p>
+    <div id="rx-from-dicom" style="margin-bottom:10px"></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Fraction Dose (Gy)</label>
+        <input type="number" id="rx-fx-dose" min="0" step="0.1" value="" placeholder="e.g. 25" style="min-width:120px">
+      </div>
+      <div class="form-group">
+        <label>Number of Fractions</label>
+        <input type="number" id="rx-num-fx" min="1" step="1" value="" placeholder="e.g. 1" style="min-width:120px">
+      </div>
+      <div class="form-group">
+        <label>Total Dose (Gy)</label>
+        <input type="text" id="rx-total" readonly style="min-width:120px;background:#e8f0fe;color:#1a3a6e;font-weight:700;border:2px solid var(--accent)" value="—">
+      </div>
+    </div>
+
+    <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
+
+    <h3 style="font-size:13px;font-weight:600;margin-bottom:8px">Identity Randomization</h3>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px">
       Random A/B/C assignment for blinded review. This mapping is fixed per subject.
     </p>
     <div id="identity-display"></div>
@@ -1116,6 +1140,83 @@ function parseStructureSet(dataset) {
 // =============================================================================
 // DVH Extraction (uses dcmjs naturalized dataset)
 // =============================================================================
+// =============================================================================
+// RT Plan Prescription Extraction (uses dcmjs naturalized dataset)
+// =============================================================================
+function extractPrescription(dataset) {
+  const results = {
+    planLabel: dataset.RTPlanLabel || '',
+    doseReferences: [],
+    fractionGroups: [],
+    summary: '',
+  };
+
+  // DoseReferenceSequence — prescription targets and dose limits
+  (dataset.DoseReferenceSequence || []).forEach(dr => {
+    const ref = {
+      number: dr.DoseReferenceNumber,
+      type: dr.DoseReferenceType || '',           // TARGET, ORGAN_AT_RISK
+      structType: dr.DoseReferenceStructureType || '',
+      description: dr.DoseReferenceDescription || '',
+      targetPrescDose: dr.TargetPrescriptionDose,  // Gy
+      targetMinDose: dr.TargetMinimumDose,
+      targetMaxDose: dr.TargetMaximumDose,
+      deliveryMaxDose: dr.DeliveryMaximumDose,
+    };
+    results.doseReferences.push(ref);
+  });
+
+  // FractionGroupSequence — number of fractions and beam info
+  (dataset.FractionGroupSequence || []).forEach(fg => {
+    const group = {
+      fractionGroupNumber: fg.FractionGroupNumber,
+      numberOfFractions: fg.NumberOfFractionsPlanned,
+      numberOfBeams: fg.NumberOfBeams,
+      referencedDoseRefs: [],
+    };
+
+    // ReferencedDoseReferenceSequence within fraction group
+    (fg.ReferencedDoseReferenceSequence || []).forEach(rdr => {
+      group.referencedDoseRefs.push({
+        doseRefNumber: rdr.ReferencedDoseReferenceNumber,
+        targetPrescDose: rdr.TargetPrescriptionDose,
+      });
+    });
+
+    results.fractionGroups.push(group);
+  });
+
+  // Build summary string
+  const parts = [];
+  if (results.planLabel) parts.push(`Plan: ${results.planLabel}`);
+
+  const numFx = results.fractionGroups[0]?.numberOfFractions;
+  if (numFx) parts.push(`${numFx} fx`);
+
+  // Find target prescription doses
+  results.doseReferences.forEach(dr => {
+    if (dr.targetPrescDose != null && dr.type === 'TARGET') {
+      const desc = dr.description || `Ref#${dr.number}`;
+      parts.push(`${desc}: ${dr.targetPrescDose} Gy`);
+    }
+  });
+
+  // Also check fraction group referenced doses
+  if (results.doseReferences.length === 0) {
+    results.fractionGroups.forEach(fg => {
+      fg.referencedDoseRefs.forEach(rdr => {
+        if (rdr.targetPrescDose != null) {
+          parts.push(`Target: ${rdr.targetPrescDose} Gy`);
+        }
+      });
+    });
+  }
+
+  results.summary = parts.join(' | ') || 'No prescription data';
+  return results;
+}
+
+
 function extractDVH(dataset) {
   const dvhSeq = dataset.DVHSequence || [];
   const dvhs = {};
@@ -1651,6 +1752,22 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
         d.dvhs = {};
       }
     }
+
+    if (d.rp && d.rp.file) {
+      try {
+        App.log(logArea, `  Parsing RP: ${folder}...`, 'log-info');
+        const rpDataset = await fullParseDicom(d.rp.file);
+        d.prescription = extractPrescription(rpDataset);
+        if (d.prescription) {
+          App.log(logArea, `  RX: ${d.prescription.summary}`, 'log-ok');
+        } else {
+          App.log(logArea, `  No prescription info found in RP`, 'log-warn');
+        }
+      } catch (e) {
+        App.log(logArea, `  ERROR parsing RP for ${folder}: ${e.message}`, 'log-err');
+        d.prescription = null;
+      }
+    }
   }
 
   App.setProgress('val-progress', 75);
@@ -1869,6 +1986,7 @@ document.getElementById('apply-mapping-btn').addEventListener('click', () => {
 
   // Show export panel
   displayIdentityMap();
+  displayDicomPrescriptions();
   document.getElementById('panel-export').classList.remove('hidden');
   document.getElementById('export-btn').disabled = false;
 
@@ -1958,6 +2076,66 @@ function evaluateAllGoals() {
 // =============================================================================
 // Identity Map Display
 // =============================================================================
+function displayDicomPrescriptions() {
+  const container = document.getElementById('rx-from-dicom');
+  container.innerHTML = '';
+
+  let hasAny = false;
+
+  App.planFolders.forEach(folder => {
+    const d = App.planData[folder];
+    if (!d.prescription) return;
+    hasAny = true;
+
+    const rx = d.prescription;
+    const div = document.createElement('div');
+    div.style.cssText = 'background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:12px';
+
+    let html = `<strong style="color:#88cc88">${folder}</strong>`;
+    if (rx.planLabel) html += ` <span style="color:var(--text-dim)">(${rx.planLabel})</span>`;
+    html += '<br>';
+
+    // Show fraction info
+    rx.fractionGroups.forEach(fg => {
+      if (fg.numberOfFractions != null) {
+        html += `Fractions: <strong>${fg.numberOfFractions}</strong>`;
+        if (fg.numberOfBeams) html += ` | Beams: ${fg.numberOfBeams}`;
+        html += '<br>';
+      }
+    });
+
+    // Show dose references
+    rx.doseReferences.forEach(dr => {
+      if (dr.targetPrescDose != null) {
+        const label = dr.description || dr.type || `Ref#${dr.number}`;
+        html += `<span style="color:var(--text-dim)">${label}:</span> `;
+        html += `<strong>${dr.targetPrescDose} Gy</strong>`;
+        if (dr.targetMinDose != null) html += ` (min: ${dr.targetMinDose} Gy)`;
+        if (dr.targetMaxDose != null) html += ` (max: ${dr.targetMaxDose} Gy)`;
+        html += '<br>';
+      }
+    });
+
+    // Show referenced dose from fraction groups if no dose references
+    if (rx.doseReferences.length === 0) {
+      rx.fractionGroups.forEach(fg => {
+        fg.referencedDoseRefs.forEach(rdr => {
+          if (rdr.targetPrescDose != null) {
+            html += `Target: <strong>${rdr.targetPrescDose} Gy</strong><br>`;
+          }
+        });
+      });
+    }
+
+    div.innerHTML = html;
+    container.appendChild(div);
+  });
+
+  if (!hasAny) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim)">No prescription data found in RT Plan files.</div>';
+  }
+}
+
 function displayIdentityMap() {
   const container = document.getElementById('identity-display');
   container.innerHTML = '';
@@ -1979,6 +2157,22 @@ function displayIdentityMap() {
   container.appendChild(cardsDiv);
 }
 
+// Prescription dose auto-calc
+function updateRxTotal() {
+  const fxDose = parseFloat(document.getElementById('rx-fx-dose').value);
+  const numFx = parseInt(document.getElementById('rx-num-fx').value);
+  if (!isNaN(fxDose) && !isNaN(numFx) && fxDose > 0 && numFx > 0) {
+    const total = fxDose * numFx;
+    document.getElementById('rx-total').value = total.toFixed(2) + ' Gy';
+    App.prescriptionDose = { fractionDoseGy: fxDose, numFractions: numFx, totalDoseGy: total };
+  } else {
+    document.getElementById('rx-total').value = '—';
+    App.prescriptionDose = null;
+  }
+}
+document.getElementById('rx-fx-dose').addEventListener('input', updateRxTotal);
+document.getElementById('rx-num-fx').addEventListener('input', updateRxTotal);
+
 document.getElementById('re-randomize-btn').addEventListener('click', () => {
   App.identityMap = randomizeIdentity(App.planFolders);
   displayIdentityMap();
@@ -1997,6 +2191,10 @@ document.getElementById('export-btn').addEventListener('click', async () => {
   App.setProgress('export-progress', 0);
 
   // Build the manifest
+  if (!App.prescriptionDose) {
+    App.log(logArea, 'WARNING: No prescription dose configured. Set it above before exporting.', 'log-warn');
+  }
+
   const manifest = {
     subject: App.subjectPath,
     site: App.siteConfig?.site || 'UNKNOWN',
@@ -2006,6 +2204,7 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     commonStructures: App.commonStructures,
     contourMappings: App.contourMappings,
     templateName: App.templateXml ? 'loaded' : '',
+    prescriptionDose: App.prescriptionDose || null,
   };
 
   // Build CT volume from first plan
