@@ -1651,6 +1651,26 @@ async function initNavigation() {
   const subjSel = document.getElementById('subject-select');
   const loadBtn = document.getElementById('load-btn');
 
+  // Load reviewers from reviewers.json
+  try {
+    const revResp = await fetch(`/reviewers.json?_=${Date.now()}`);
+    if (revResp.ok) {
+      const reviewers = await revResp.json();
+      reviewers.sort((a, b) => {
+        const lastA = a.trim().split(/\s+/).pop().toLowerCase();
+        const lastB = b.trim().split(/\s+/).pop().toLowerCase();
+        return lastA.localeCompare(lastB);
+      });
+      const revSel = document.getElementById('reviewer-select');
+      reviewers.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        revSel.appendChild(opt);
+      });
+    }
+  } catch (e) { console.warn('Could not load reviewers.json:', e); }
+
   // Load sites
   const sites = await DataLoader.loadSites();
   sites.forEach(site => {
@@ -1679,18 +1699,8 @@ async function initNavigation() {
     });
     subjSel.disabled = false;
 
-    // Load site config for reviewer list
-    const config = await DataLoader.loadSiteConfig(site);
-    if (config?.reviewers) {
-      const revSel = document.getElementById('reviewer-select');
-      revSel.innerHTML = '<option value="">—</option>';
-      config.reviewers.forEach(r => {
-        const opt = document.createElement('option');
-        opt.value = r;
-        opt.textContent = r;
-        revSel.appendChild(opt);
-      });
-    }
+    // Load site config (if needed for other settings)
+    await DataLoader.loadSiteConfig(site);
   });
 
   // Subject change -> enable load
