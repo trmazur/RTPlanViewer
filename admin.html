@@ -1,0 +1,2321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RT Plan Review — Administration Tool</title>
+  <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f7f9;
+      --panel: #ffffff;
+      --border: #dde1e6;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --text: #1e293b;
+      --text-dim: #64748b;
+      --green: #16a34a;
+      --green-bg: #dcfce7;
+      --red: #dc2626;
+      --red-bg: #fee2e2;
+      --yellow: #ca8a04;
+      --yellow-bg: #fef9c3;
+      --orange: #ea580c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* Layout */
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+    header {
+      background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+      color: white;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+      border-radius: 10px;
+    }
+    header h1 { font-size: 22px; font-weight: 700; }
+    header p { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+
+    /* Panels */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .panel h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .panel h2 .step-num {
+      background: var(--accent);
+      color: white;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    /* Form elements */
+    .form-row {
+      display: flex;
+      gap: 16px;
+      align-items: flex-end;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .form-group label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    select, input[type="text"], input[type="file"] {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 14px;
+      background: white;
+      min-width: 200px;
+    }
+    select:focus, input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:not(:disabled):hover { background: var(--accent-hover); }
+    .btn-success { background: var(--green); color: white; }
+    .btn-success:not(:disabled):hover { background: #15803d; }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-danger:not(:disabled):hover { background: #b91c1c; }
+    .btn-outline {
+      background: white;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-outline:not(:disabled):hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .btn-sm { padding: 4px 12px; font-size: 12px; }
+
+    /* Status badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-pass { background: var(--green-bg); color: var(--green); }
+    .badge-fail { background: var(--red-bg); color: var(--red); }
+    .badge-warn { background: var(--yellow-bg); color: var(--yellow); }
+    .badge-info { background: #dbeafe; color: var(--accent); }
+
+    /* Validation results */
+    .validation-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .val-card {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+    }
+    .val-card.pass { border-left: 4px solid var(--green); }
+    .val-card.fail { border-left: 4px solid var(--red); }
+    .val-card h4 { font-size: 13px; margin-bottom: 6px; }
+    .val-card .detail { font-size: 12px; color: var(--text-dim); }
+
+    /* Contour mapping table */
+    .mapping-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 13px;
+    }
+    .mapping-table th {
+      background: #f1f5f9;
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 2px solid var(--border);
+      position: sticky;
+      top: 0;
+    }
+    .mapping-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid #f1f5f9;
+      vertical-align: middle;
+    }
+    .mapping-table tr:hover { background: #f8fafc; }
+    .mapping-table tr.excluded { opacity: 0.5; }
+    .mapping-table tr.excluded td { text-decoration: line-through; }
+    .mapping-table select {
+      min-width: 160px;
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    .struct-color {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 6px;
+      border: 1px solid rgba(0,0,0,0.15);
+    }
+    .common-indicator {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .common-yes { background: var(--green-bg); color: var(--green); }
+    .common-no { background: var(--red-bg); color: var(--red); }
+
+    /* Clinical goals table */
+    .goals-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 12px;
+    }
+    .goals-table th {
+      background: #f1f5f9;
+      padding: 6px 8px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 2px solid var(--border);
+    }
+    .goals-table td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .goals-table .goal-pass { color: var(--green); font-weight: 600; }
+    .goals-table .goal-marginal { color: var(--yellow); font-weight: 600; }
+    .goals-table .goal-fail { color: var(--red); font-weight: 600; }
+    .priority-header {
+      background: #e2e8f0;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    /* Progress */
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 4px;
+      transition: width 0.3s;
+    }
+
+    /* Log area */
+    .log-area {
+      background: #0f172a;
+      color: #94a3b8;
+      border-radius: 6px;
+      padding: 12px;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+      line-height: 1.6;
+      margin-top: 12px;
+    }
+    .log-area .log-ok { color: #4ade80; }
+    .log-area .log-err { color: #f87171; }
+    .log-area .log-warn { color: #fbbf24; }
+    .log-area .log-info { color: #60a5fa; }
+
+    /* Collapsible */
+    .collapsible-toggle {
+      cursor: pointer;
+      user-select: none;
+    }
+    .collapsible-toggle::before {
+      content: '\25B6';
+      display: inline-block;
+      margin-right: 6px;
+      transition: transform 0.2s;
+      font-size: 11px;
+    }
+    .collapsible-toggle.open::before {
+      transform: rotate(90deg);
+    }
+
+    /* Hidden */
+    .hidden { display: none !important; }
+
+    /* Notification */
+    .notification {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 14px 24px;
+      border-radius: 8px;
+      color: white;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      z-index: 1000;
+      transition: opacity 0.3s, transform 0.3s;
+      transform: translateY(0);
+    }
+    .notification.hide {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    .notification.success { background: var(--green); }
+    .notification.error { background: var(--red); }
+
+    /* Scrollable table wrapper */
+    .table-scroll {
+      max-height: 500px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    /* Identity map display */
+    .identity-cards {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .id-card {
+      flex: 1;
+      padding: 16px;
+      border-radius: 8px;
+      text-align: center;
+      border: 2px solid var(--border);
+    }
+    .id-card .plan-letter {
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .id-card .plan-folder {
+      font-size: 12px;
+      color: var(--text-dim);
+      word-break: break-all;
+    }
+    .id-card:nth-child(1) .plan-letter { color: #4a9eff; }
+    .id-card:nth-child(2) .plan-letter { color: #ff9944; }
+    .id-card:nth-child(3) .plan-letter { color: #88ee66; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>RT Plan Review — Administration Tool</h1>
+    <p>Pre-process DICOM data, validate subjects, map contours, and prepare data for blinded plan review.</p>
+  </header>
+
+  <!-- Step 1: Site Configuration -->
+  <div class="panel" id="panel-site">
+    <h2><span class="step-num">1</span> Site Configuration</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Anatomical Site</label>
+        <select id="site-select">
+          <option value="">— Select or scan for sites —</option>
+        </select>
+      </div>
+      <button class="btn btn-outline" id="scan-sites-btn" title="Scan SITES/ directory for available sites">Scan Sites</button>
+      <div class="form-group">
+        <label>Clinical Goal Template</label>
+        <input type="file" id="template-file" accept=".xml">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Reviewers (comma-separated)</label>
+        <input type="text" id="reviewers-input" value="Reviewer 1, Reviewer 2" style="min-width:400px">
+      </div>
+      <button class="btn btn-primary" id="save-site-config-btn" disabled>Save Site Config</button>
+    </div>
+    <div id="template-info" class="hidden" style="margin-top:12px;font-size:13px;color:var(--text-dim)"></div>
+  </div>
+
+  <!-- Step 2: Subject Selection & Validation -->
+  <div class="panel" id="panel-validate">
+    <h2><span class="step-num">2</span> Subject Validation</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Subject Directory</label>
+        <input type="file" id="subject-folder" webkitdirectory directory multiple>
+      </div>
+      <button class="btn btn-primary" id="validate-btn" disabled>Validate Subject</button>
+    </div>
+    <div id="validation-status" class="hidden"></div>
+    <div class="progress-bar hidden" id="val-progress"><div class="progress-fill" style="width:0%"></div></div>
+    <div class="log-area hidden" id="val-log"></div>
+    <div class="validation-grid hidden" id="val-results"></div>
+  </div>
+
+  <!-- Step 3: Contour Mapping -->
+  <div class="panel hidden" id="panel-mapping">
+    <h2><span class="step-num">3</span> Contour Mapping</h2>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+      Map each template structure to the corresponding contour in each plan's structure set.
+      Only structures mapped in <strong>all 3 plans</strong> will be visible to reviewers.
+    </p>
+    <div id="mapping-summary" style="margin-bottom:12px"></div>
+    <div class="table-scroll">
+      <table class="mapping-table" id="mapping-table">
+        <thead>
+          <tr>
+            <th>Template Structure</th>
+            <th>Plan 1</th>
+            <th>Plan 2</th>
+            <th>Plan 3</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="mapping-tbody"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:12px">
+      <button class="btn btn-outline" id="auto-map-btn">Auto-Match by Name</button>
+      <button class="btn btn-primary" id="apply-mapping-btn" disabled>Apply Mapping & Evaluate Goals</button>
+    </div>
+  </div>
+
+  <!-- Step 4: Clinical Goals Review -->
+  <div class="panel hidden" id="panel-goals">
+    <h2><span class="step-num">4</span> Clinical Goals Evaluation</h2>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+      Clinical goal results based on DVH data extracted from RT Dose files, evaluated against the template.
+    </p>
+    <div class="table-scroll">
+      <table class="goals-table" id="goals-table">
+        <thead>
+          <tr>
+            <th>Structure</th>
+            <th>Goal</th>
+            <th>Criteria</th>
+            <th>Plan 1</th>
+            <th>Plan 2</th>
+            <th>Plan 3</th>
+          </tr>
+        </thead>
+        <tbody id="goals-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Step 5: Identity Randomization & Export -->
+  <div class="panel hidden" id="panel-export">
+    <h2><span class="step-num">5</span> Identity Randomization & Export</h2>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+      Random A/B/C assignment for blinded review. This mapping is fixed per subject.
+    </p>
+    <div id="identity-display"></div>
+    <button class="btn btn-outline" id="re-randomize-btn" style="margin-top:12px">Re-randomize</button>
+    <hr style="margin:20px 0;border:none;border-top:1px solid var(--border)">
+    <div class="form-row">
+      <button class="btn btn-success" id="export-btn" disabled>Export Pre-processed Data</button>
+    </div>
+    <div class="progress-bar hidden" id="export-progress"><div class="progress-fill" style="width:0%"></div></div>
+    <div class="log-area hidden" id="export-log"></div>
+  </div>
+
+  <!-- Step 6: Ranking Aggregation -->
+  <div class="panel" id="panel-rankings">
+    <h2><span class="step-num">6</span> Ranking Aggregation</h2>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+      View and export all submitted rankings across subjects, decoded with identity mappings.
+    </p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Site</label>
+        <select id="agg-site-select">
+          <option value="">— Select —</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="load-rankings-btn">Load Rankings</button>
+      <button class="btn btn-success" id="export-rankings-btn" disabled>Export as CSV</button>
+    </div>
+    <div class="table-scroll" style="margin-top:12px">
+      <table class="goals-table" id="rankings-table">
+        <thead><tr><th>Subject</th><th>Reviewer</th><th>Plan A (actual)</th><th>Plan B (actual)</th><th>Plan C (actual)</th><th>Tied?</th><th>Notes</th><th>Submitted</th></tr></thead>
+        <tbody id="rankings-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+// =============================================================================
+// DICOM Tag Constants
+// =============================================================================
+const SOP_CT            = '1.2.840.10008.5.1.4.1.1.2';
+const SOP_RT_STRUCT     = '1.2.840.10008.5.1.4.1.1.481.3';
+const SOP_RT_DOSE       = '1.2.840.10008.5.1.4.1.1.481.2';
+const SOP_RT_PLAN       = '1.2.840.10008.5.1.4.1.1.481.5';
+
+// DICOM Tag hex addresses
+const TAG = {
+  SOPClassUID:             '00080016',
+  Modality:                '00080060',
+  Rows:                    '00280010',
+  Columns:                 '00280011',
+  BitsAllocated:           '00280100',
+  BitsStored:              '00280101',
+  HighBit:                 '00280102',
+  PixelRepresentation:     '00280103',
+  RescaleIntercept:        '00281052',
+  RescaleSlope:            '00281053',
+  PixelSpacing:            '00280030',
+  ImagePositionPatient:    '00200032',
+  ImageOrientationPatient: '00200037',
+  SliceThickness:          '00180050',
+  FrameOfReferenceUID:     '00200052',
+  PixelData:               '7FE00010',
+  NumberOfFrames:          '00280008',
+
+  // RT Structure Set
+  StructureSetROISequence: '30060020',
+  ROINumber:               '30060022',
+  ROIName:                 '30060026',
+  ROIContourSequence:      '30060080',
+  ReferencedROINumber:     '30060084',
+  ContourSequence:         '30060040',
+  ContourGeometricType:    '30060042',
+  NumberOfContourPoints:   '30060046',
+  ContourData:             '30060050',
+  ROIDisplayColor:         '3006002A',
+
+  // RT Dose
+  DoseGridScaling:         '3004000E',
+  GridFrameOffsetVector:   '3004000C',
+  DVHSequence:             '30040050',
+  DVHType:                 '30040001',
+  DoseUnits:               '30040002',
+  DVHDoseScaling:          '30040052',
+  DVHVolumeUnits:          '30040054',
+  DVHNumberOfBins:         '30040056',
+  DVHData:                 '30040058',
+  DVHReferencedROISequence:'30040060',
+  DVHMinimumDose:          '30040070',
+  DVHMaximumDose:          '30040072',
+  DVHMeanDose:             '30040074',
+
+  // RT Plan
+  RTPlanLabel:             '300A0002',
+  ReferencedStructureSetSequence: '300C0060',
+  ReferencedSOPInstanceUID:'00081155',
+};
+
+// =============================================================================
+// DICOM Parser — Header-only quick parse + full parse via dcmjs
+// =============================================================================
+// For VALIDATION we only need SOPClassUID, FrameOfReferenceUID, and basic
+// image geometry. These are all in the first few KB of each file.
+// For FULL PARSING (structure sets, dose grids, DVH) we use dcmjs.
+
+// Quick header parser — reads only metadata tags, skips pixel data & sequences
+const DicomQuickParse = {
+  /**
+   * Parse just the header tags from a DICOM file.
+   * Reads up to maxBytes (default 64KB) — enough for all metadata in CT files.
+   * For RS/RD/RP files, we only need SOPClassUID and FrameOfReferenceUID.
+   */
+  parse(arrayBuffer, maxBytes) {
+    const limit = maxBytes || Math.min(arrayBuffer.byteLength, 65536);
+    const dv = new DataView(arrayBuffer);
+    const bytes = new Uint8Array(arrayBuffer);
+    let offset = 0;
+    const dataset = {};
+
+    // Check DICM preamble
+    if (bytes.length > 132 &&
+        bytes[128] === 0x44 && bytes[129] === 0x49 &&
+        bytes[130] === 0x43 && bytes[131] === 0x4D) {
+      offset = 132;
+    }
+
+    let explicitVR = true;
+    let inMeta = (offset === 132);
+
+    while (offset < limit - 8 && offset < arrayBuffer.byteLength - 8) {
+      const group = dv.getUint16(offset, true);
+      const element = dv.getUint16(offset + 2, true);
+
+      // Stop at pixel data or very high group numbers
+      if (group === 0x7FE0) break;
+      // Stop at RT-specific sequence data (too complex for quick parse)
+      if (group >= 0x3006 && !inMeta) break;
+
+      offset += 4;
+
+      if (group === 0xFFFE) {
+        // Sequence delimiter — skip
+        offset += 4;
+        continue;
+      }
+
+      const tag = ((group << 16) | element).toString(16).padStart(8, '0');
+
+      // Transition from meta to data
+      if (inMeta && group > 0x0002) {
+        inMeta = false;
+        const ts = dataset['00020010'];
+        if (ts && typeof ts === 'string' &&
+            ts.includes('1.2.840.10008.1.2') &&
+            !ts.includes('1.2.840.10008.1.2.1') &&
+            !ts.includes('1.2.840.10008.1.2.2')) {
+          explicitVR = false;
+        }
+      }
+
+      const useExplicit = inMeta ? true : explicitVR;
+      let vr, valueLength;
+
+      if (useExplicit) {
+        if (offset + 2 > arrayBuffer.byteLength) break;
+        vr = String.fromCharCode(bytes[offset], bytes[offset + 1]);
+        offset += 2;
+
+        if (['OB', 'OD', 'OF', 'OL', 'OW', 'SQ', 'UC', 'UN', 'UR', 'UT'].includes(vr)) {
+          offset += 2;
+          if (offset + 4 > arrayBuffer.byteLength) break;
+          valueLength = dv.getUint32(offset, true);
+          offset += 4;
+        } else {
+          if (offset + 2 > arrayBuffer.byteLength) break;
+          valueLength = dv.getUint16(offset, true);
+          offset += 2;
+        }
+      } else {
+        // Implicit VR — look up the VR from the tag
+        if (offset + 4 > arrayBuffer.byteLength) break;
+        valueLength = dv.getUint32(offset, true);
+        offset += 4;
+        vr = this._implicitVR(tag);
+      }
+
+      // Skip undefined-length and sequences entirely
+      if (valueLength === 0xFFFFFFFF || vr === 'SQ') {
+        break; // Stop parsing — we've got what we need
+      }
+
+      if (valueLength > 100000 || offset + valueLength > arrayBuffer.byteLength) break;
+
+      // Read value as string or number depending on VR
+      const val = this._readValue(dv, bytes, offset, valueLength, vr);
+      dataset[tag] = val;
+      offset += valueLength;
+    }
+
+    return dataset;
+  },
+
+  _readValue(dv, bytes, offset, len, vr) {
+    if (len === 0) return '';
+    switch (vr) {
+      case 'US': return len === 2 ? dv.getUint16(offset, true) : '';
+      case 'SS': return len === 2 ? dv.getInt16(offset, true) : '';
+      case 'UL': return len === 4 ? dv.getUint32(offset, true) : '';
+      case 'SL': return len === 4 ? dv.getInt32(offset, true) : '';
+      case 'FL': return len === 4 ? dv.getFloat32(offset, true) : '';
+      case 'FD': return len === 8 ? dv.getFloat64(offset, true) : '';
+      case 'DS': {
+        const s = this._str(bytes, offset, len);
+        const parts = s.split('\\').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+        return parts.length === 1 ? parts[0] : parts;
+      }
+      case 'IS': {
+        const s = this._str(bytes, offset, len);
+        const parts = s.split('\\').map(v => parseInt(v.trim(), 10)).filter(v => !isNaN(v));
+        return parts.length === 1 ? parts[0] : parts;
+      }
+      default:
+        return this._str(bytes, offset, len);
+    }
+  },
+
+  _str(bytes, offset, len) {
+    let end = offset + len;
+    while (end > offset && (bytes[end-1] === 0 || bytes[end-1] === 0x20)) end--;
+    return new TextDecoder('iso-8859-1').decode(bytes.slice(offset, end));
+  },
+
+  _implicitVR(tag) {
+    const map = {
+      '00280010': 'US', '00280011': 'US', // Rows, Columns
+      '00280100': 'US', '00280101': 'US', '00280102': 'US', '00280103': 'US', // Bits/PixRep
+      '00280008': 'IS', // NumberOfFrames
+      '00281052': 'DS', '00281053': 'DS', // RescaleIntercept/Slope
+      '00280030': 'DS', // PixelSpacing
+      '00200032': 'DS', // ImagePositionPatient
+      '00200037': 'DS', // ImageOrientationPatient
+      '00180050': 'DS', // SliceThickness
+    };
+    return map[tag] || 'LO';
+  },
+
+  getString(ds, tag) {
+    const v = ds[tag];
+    if (v === undefined || v === null) return '';
+    return typeof v === 'string' ? v.trim() : String(v);
+  },
+  getNumber(ds, tag) {
+    const v = ds[tag];
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') return parseFloat(v);
+    if (Array.isArray(v)) return v[0];
+    return NaN;
+  },
+  getNumberArray(ds, tag) {
+    const v = ds[tag];
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'number') return [v];
+    if (typeof v === 'string') return v.split('\\').map(Number);
+    return [];
+  },
+};
+
+// Alias for backward compatibility
+const DicomParser = DicomQuickParse;
+
+
+// =============================================================================
+// Application State
+// =============================================================================
+const App = {
+  siteConfig: null,
+  templateXml: null,
+  templateStructures: [],  // parsed from XML: {id, name, color, category, objectives[]}
+  subjectPath: '',
+  planFolders: [],
+  planData: {},  // { folderName: { ct: [...], rs: {...}, rd: {...}, rp: {...} } }
+  validation: null,
+  contourMappings: {},  // { templateId: { plan0: rsROIName, plan1: rsROIName, plan2: rsROIName } }
+  dvhData: {},  // { folderName: { roiNumber: { type, doseUnit, data: [[dose,vol],...], min, max, mean } } }
+  clinicalGoals: {},  // { planLabel: [ {struct, goal, criteria, value, status} ] }
+  identityMap: {},  // { folderName: 'A'|'B'|'C' }
+  commonStructures: [],  // template IDs mapped in all 3 plans
+
+  log(area, msg, cls = '') {
+    const el = document.getElementById(area);
+    el.classList.remove('hidden');
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  },
+
+  setProgress(id, pct) {
+    const bar = document.getElementById(id);
+    bar.classList.remove('hidden');
+    bar.querySelector('.progress-fill').style.width = pct + '%';
+  },
+
+  notify(msg, type = 'success') {
+    const n = document.createElement('div');
+    n.className = `notification ${type}`;
+    n.textContent = msg;
+    document.body.appendChild(n);
+    setTimeout(() => n.classList.add('hide'), 3000);
+    setTimeout(() => n.remove(), 3500);
+  },
+};
+
+
+// =============================================================================
+// Template XML Parser
+// =============================================================================
+function parseTemplateXml(xmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, 'text/xml');
+  const structures = [];
+
+  const displayName = doc.querySelector('DisplayName')?.textContent || 'Unknown';
+
+  // Helper to parse structures from a parent node
+  function parseStructureNodes(parent, category) {
+    if (!parent) return;
+    parent.querySelectorAll(':scope > Structure').forEach(node => {
+      const id = node.getAttribute('Id');
+      const name = node.querySelector('Name')?.textContent || id;
+      const colorVal = node.querySelector('Color')?.textContent;
+      let color = '#888888';
+      if (colorVal) {
+        // Color is stored as an ARGB int (e.g., 4284623308)
+        const argb = parseInt(colorVal) >>> 0;
+        const r = (argb >> 16) & 0xFF;
+        const g = (argb >> 8) & 0xFF;
+        const b = argb & 0xFF;
+        color = `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+      }
+      structures.push({ id, name, color, category });
+    });
+  }
+
+  parseStructureNodes(doc.querySelector('OARs'), 'OAR');
+  parseStructureNodes(doc.querySelector('Targets'), 'Target');
+  parseStructureNodes(doc.querySelector('ControlRegions'), 'ControlRegion');
+
+  // Parse clinical goals (objectives)
+  const objectives = [];
+  const phases = doc.querySelectorAll('Phase');
+  phases.forEach(phase => {
+    // Target objectives
+    phase.querySelectorAll('PrescriptionTarget').forEach(pt => {
+      const structId = pt.querySelector('StructureId')?.textContent;
+      const fractionDose = parseFloat(pt.querySelector('FractionDoseGy')?.textContent) || 0;
+
+      // Quality indices
+      pt.querySelectorAll('QualityIndex').forEach(qi => {
+        const cg = qi.querySelector('ClinicalGoal');
+        if (cg) {
+          objectives.push(parseClinicalGoal(cg, structId, qi, fractionDose));
+        }
+      });
+
+      // Objectives
+      pt.querySelectorAll('Objectives > Objective').forEach(obj => {
+        const cg = obj.querySelector('ClinicalGoal');
+        if (cg) {
+          objectives.push(parseClinicalGoal(cg, structId, obj, fractionDose));
+        }
+      });
+    });
+
+    // OAR objectives
+    phase.querySelectorAll('PhaseOARObjectives > Objective').forEach(obj => {
+      const structId = obj.querySelector('StructureId')?.textContent;
+      const cg = obj.querySelector('ClinicalGoal');
+      if (cg) {
+        objectives.push(parseClinicalGoal(cg, structId, obj, 0));
+      }
+    });
+
+    // Body objectives
+    phase.querySelectorAll('PhaseBodyObjectives > Objective').forEach(obj => {
+      const structId = obj.querySelector('StructureId')?.textContent || 'Body';
+      const cg = obj.querySelector('ClinicalGoal');
+      if (cg) {
+        objectives.push(parseClinicalGoal(cg, structId, obj, 0));
+      }
+    });
+  });
+
+  return { displayName, structures, objectives };
+}
+
+function parseClinicalGoal(cgNode, structId, objNode, fractionDose) {
+  const type = cgNode.querySelector('Type')?.textContent || '';
+  const qualifier = cgNode.querySelector('Qualifier')?.textContent || '';
+
+  const volumeNode = cgNode.querySelector('Volume');
+  const doseNode = cgNode.querySelector('Dose');
+
+  const volume = volumeNode ? {
+    value: parseFloat(volumeNode.querySelector('Value')?.textContent) || 0,
+    unit: volumeNode.querySelector('Unit')?.textContent || 'Relative',
+  } : null;
+
+  const dose = doseNode ? {
+    value: parseFloat(doseNode.querySelector('Value')?.textContent) || 0,
+    unit: doseNode.querySelector('Unit')?.textContent || 'Absolute',
+  } : null;
+
+  // Acceptable variation
+  const avNode = objNode.querySelector('AcceptableVariation');
+  let acceptableVariation = null;
+  if (avNode) {
+    const avDose = avNode.querySelector('Dose');
+    const avVolume = avNode.querySelector('Volume');
+    acceptableVariation = {
+      dose: avDose ? {
+        value: parseFloat(avDose.querySelector('Value')?.textContent) || 0,
+        unit: avDose.querySelector('Unit')?.textContent || 'Absolute',
+      } : null,
+      volume: avVolume ? {
+        value: parseFloat(avVolume.querySelector('Value')?.textContent) || 0,
+        unit: avVolume.querySelector('Unit')?.textContent || 'Relative',
+      } : null,
+    };
+  }
+
+  // Upper/Lower limits (for ConformityIndex etc.)
+  const upperLimit = cgNode.querySelector('UpperLimit > Value')?.textContent;
+  const lowerLimit = cgNode.querySelector('LowerLimit > Value')?.textContent;
+
+  const priority = parseInt(objNode.querySelector('Priority')?.textContent) || 99;
+  const priorityWithinGroup = parseInt(objNode.querySelector('PriorityWithinGroup')?.textContent) || 0;
+
+  return {
+    structId,
+    type,
+    qualifier,
+    volume,
+    dose,
+    acceptableVariation,
+    upperLimit: upperLimit ? parseFloat(upperLimit) : null,
+    lowerLimit: lowerLimit ? parseFloat(lowerLimit) : null,
+    priority,
+    priorityWithinGroup,
+    fractionDose,
+  };
+}
+
+function formatGoalCriteria(obj) {
+  const struct = App.templateStructures.find(s => s.id === obj.structId);
+  const structName = struct ? struct.name : obj.structId;
+
+  if (obj.type === 'ConformityIndex') {
+    let crit = 'CI';
+    if (obj.upperLimit !== null) crit += ` < ${obj.upperLimit}`;
+    if (obj.lowerLimit !== null) crit += ` > ${obj.lowerLimit}`;
+    return { structName, goalType: 'CI', criteria: crit };
+  }
+
+  const dir = obj.qualifier.includes('Less') ? '<' : '>';
+
+  if (obj.type === 'DoseVolume') {
+    // "D at V should be < X Gy" or "V at D should be > X%"
+    const volStr = obj.volume.unit === 'Absolute'
+      ? `${obj.volume.value}cc`
+      : `${obj.volume.value}%`;
+    const doseStr = obj.dose.unit === 'Absolute'
+      ? `${obj.dose.value} Gy`
+      : `${obj.dose.value}%`;
+
+    if (obj.qualifier.includes('Less')) {
+      return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
+    } else {
+      return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
+    }
+  }
+
+  if (obj.type === 'VolumeDose') {
+    const doseStr = obj.dose.unit === 'Absolute'
+      ? `${obj.dose.value} Gy`
+      : `${obj.dose.value}%`;
+    const volStr = obj.volume.unit === 'Absolute'
+      ? `${obj.volume.value}cc`
+      : `${obj.volume.value}%`;
+
+    return { structName, goalType: `V${doseStr}`, criteria: `${dir} ${volStr}` };
+  }
+
+  return { structName, goalType: obj.type, criteria: JSON.stringify(obj) };
+}
+
+
+// =============================================================================
+// DICOM File Classification (header-only quick parse — fast & safe)
+// =============================================================================
+async function classifyDicomFiles(files, logArea) {
+  const result = { ct: [], rs: null, rd: null, rp: null, forUID: null, errors: [] };
+  let fileCount = 0;
+
+  for (const file of files) {
+    if (!file.name.toLowerCase().endsWith('.dcm')) continue;
+    fileCount++;
+
+    try {
+      // Quick parse: read only first 64KB for header metadata
+      const headerSize = Math.min(file.size, 65536);
+      const headerSlice = file.slice(0, headerSize);
+      const buf = await headerSlice.arrayBuffer();
+      const ds = DicomQuickParse.parse(buf, headerSize);
+
+      // Try to get SOPClassUID from dataset or meta header
+      let sopClass = DicomQuickParse.getString(ds, TAG.SOPClassUID);
+      if (!sopClass) sopClass = DicomQuickParse.getString(ds, '00020002'); // MediaStorageSOPClassUID
+
+      const forUID = DicomQuickParse.getString(ds, TAG.FrameOfReferenceUID);
+
+      if (sopClass === SOP_CT) {
+        const pos = DicomQuickParse.getNumberArray(ds, TAG.ImagePositionPatient);
+        const spacing = DicomQuickParse.getNumberArray(ds, TAG.PixelSpacing);
+        const rows = DicomQuickParse.getNumber(ds, TAG.Rows);
+        const cols = DicomQuickParse.getNumber(ds, TAG.Columns);
+        const bitsAlloc = DicomQuickParse.getNumber(ds, TAG.BitsAllocated);
+        const pixRep = DicomQuickParse.getNumber(ds, TAG.PixelRepresentation);
+        const slope = DicomQuickParse.getNumber(ds, TAG.RescaleSlope) || 1;
+        const intercept = DicomQuickParse.getNumber(ds, TAG.RescaleIntercept) || 0;
+        const orient = DicomQuickParse.getNumberArray(ds, TAG.ImageOrientationPatient);
+        const thickness = DicomQuickParse.getNumber(ds, TAG.SliceThickness);
+
+        result.ct.push({
+          file, headerDs: ds, forUID, position: pos, spacing, rows, cols,
+          bitsAllocated: bitsAlloc, pixelRepresentation: pixRep,
+          slope, intercept, orientation: orient, thickness,
+        });
+
+        if (!result.forUID && forUID) result.forUID = forUID;
+
+      } else if (sopClass === SOP_RT_STRUCT) {
+        // Store file ref only — full parse deferred to mapping step
+        result.rs = { file, forUID };
+        App.log(logArea, `  Found RT Structure Set: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)`, 'log-info');
+
+      } else if (sopClass === SOP_RT_DOSE) {
+        result.rd = { file, forUID };
+        App.log(logArea, `  Found RT Dose: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)`, 'log-info');
+
+      } else if (sopClass === SOP_RT_PLAN) {
+        result.rp = { file, forUID };
+        App.log(logArea, `  Found RT Plan: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)`, 'log-info');
+      }
+    } catch (e) {
+      result.errors.push(`Error parsing ${file.name}: ${e.message}`);
+    }
+  }
+
+  // Sort CT by z-position
+  result.ct.sort((a, b) => {
+    const za = Array.isArray(a.position) ? a.position[2] : 0;
+    const zb = Array.isArray(b.position) ? b.position[2] : 0;
+    return za - zb;
+  });
+
+  App.log(logArea, `  CT slices: ${result.ct.length}, Errors: ${result.errors.length}`, result.errors.length ? 'log-warn' : 'log-ok');
+  if (result.errors.length > 0) {
+    result.errors.forEach(err => App.log(logArea, `    ${err}`, 'log-warn'));
+  }
+
+  return result;
+}
+
+
+// =============================================================================
+// Full DICOM Parsing via dcmjs (loaded on demand for RS/RD files)
+// =============================================================================
+let dcmjsLoaded = false;
+async function ensureDcmjs() {
+  if (dcmjsLoaded) return;
+  return new Promise((resolve, reject) => {
+    if (window.dcmjs) { dcmjsLoaded = true; resolve(); return; }
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/dcmjs@0.33.0/build/dcmjs.js';
+    script.onload = () => { dcmjsLoaded = true; resolve(); };
+    script.onerror = () => reject(new Error('Failed to load dcmjs library'));
+    document.head.appendChild(script);
+  });
+}
+
+async function fullParseDicom(file) {
+  await ensureDcmjs();
+  const buf = await file.arrayBuffer();
+  const dicomData = dcmjs.data.DicomMessage.readFile(buf);
+  const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicomData.dict);
+  return dataset;
+}
+
+
+// =============================================================================
+// Structure Set Parsing (uses dcmjs naturalized dataset)
+// =============================================================================
+function parseStructureSet(dataset) {
+  const rois = {};
+
+  // Build ROI number -> name map
+  (dataset.StructureSetROISequence || []).forEach(item => {
+    const num = item.ROINumber;
+    const name = item.ROIName || `ROI_${num}`;
+    rois[num] = { number: num, name, color: '#888888', contours: [] };
+  });
+
+  // Extract contour data and colors
+  (dataset.ROIContourSequence || []).forEach(item => {
+    const refNum = item.ReferencedROINumber;
+    if (!rois[refNum]) return;
+
+    // Color
+    const colorArr = item.ROIDisplayColor;
+    if (Array.isArray(colorArr) && colorArr.length >= 3) {
+      rois[refNum].color = `rgb(${colorArr[0]},${colorArr[1]},${colorArr[2]})`;
+    }
+
+    // Contour data
+    (item.ContourSequence || []).forEach(c => {
+      const type = c.ContourGeometricType;
+      if (type !== 'CLOSED_PLANAR') return;
+
+      const data = c.ContourData;
+      if (!data || !Array.isArray(data) || data.length < 9) return;
+
+      const points = [];
+      for (let i = 0; i < data.length; i += 3) {
+        points.push({ x: data[i], y: data[i+1], z: data[i+2] });
+      }
+      if (points.length > 0) {
+        rois[refNum].contours.push({ z: points[0].z, points, type });
+      }
+    });
+  });
+
+  return Object.values(rois);
+}
+
+
+// =============================================================================
+// DVH Extraction (uses dcmjs naturalized dataset)
+// =============================================================================
+function extractDVH(dataset) {
+  const dvhSeq = dataset.DVHSequence || [];
+  const dvhs = {};
+
+  dvhSeq.forEach(item => {
+    const dvhType = item.DVHType || '';
+    const doseUnit = item.DoseUnits || '';
+    const nBins = item.DVHNumberOfBins || 0;
+    const data = item.DVHData;
+    const minDose = item.DVHMinimumDose;
+    const maxDose = item.DVHMaximumDose;
+    const meanDose = item.DVHMeanDose;
+
+    // Get referenced ROI number
+    const refROISeq = item.DVHReferencedROISequence || [];
+    const refROINum = refROISeq.length > 0 ? refROISeq[0].ReferencedROINumber : null;
+    if (refROINum === null || !data || !Array.isArray(data)) return;
+
+    // Parse DVH data: alternating dose-bin-width and volume values
+    const curve = [];
+    let cumDose = 0;
+    for (let i = 0; i < data.length; i += 2) {
+      const binWidth = data[i];
+      const volume = data[i + 1];
+      cumDose += binWidth;
+      curve.push({ dose: cumDose, volume });
+    }
+
+    dvhs[refROINum] = {
+      type: dvhType,
+      doseUnit,
+      nBins,
+      curve,
+      minDose: minDose != null ? minDose : null,
+      maxDose: maxDose != null ? maxDose : null,
+      meanDose: meanDose != null ? meanDose : null,
+    };
+  });
+
+  return dvhs;
+}
+
+
+// =============================================================================
+// CT Volume Builder (uses dcmjs full parse per slice)
+// =============================================================================
+async function buildCTVolume(ctSlices, onProgress) {
+  if (ctSlices.length === 0) return null;
+  await ensureDcmjs();
+
+  const first = ctSlices[0];
+  const rows = first.rows;
+  const cols = first.cols;
+  const nSlices = ctSlices.length;
+  const spacing = first.spacing;
+  const origin = first.position;
+  const orientation = first.orientation;
+  const thickness = first.thickness;
+
+  // Compute slice spacing from positions
+  let sliceSpacing = thickness || 1;
+  if (ctSlices.length >= 2) {
+    const z0 = Array.isArray(ctSlices[0].position) ? ctSlices[0].position[2] : 0;
+    const z1 = Array.isArray(ctSlices[1].position) ? ctSlices[1].position[2] : 0;
+    sliceSpacing = Math.abs(z1 - z0) || thickness || 1;
+  }
+
+  const volume = new Int16Array(rows * cols * nSlices);
+
+  for (let s = 0; s < nSlices; s++) {
+    const slice = ctSlices[s];
+    if (onProgress && s % 20 === 0) onProgress(s, nSlices);
+
+    try {
+      // Full parse this slice to get pixel data
+      const dataset = await fullParseDicom(slice.file);
+      const pixelData = dataset.PixelData;
+      if (!pixelData) continue;
+
+      const slope = slice.slope || 1;
+      const intercept = slice.intercept || 0;
+      const off = s * rows * cols;
+
+      // dcmjs returns PixelData as ArrayBuffer or array of ArrayBuffers
+      const buffer = Array.isArray(pixelData) ? pixelData[0] : pixelData;
+      const srcView = slice.pixelRepresentation === 1
+        ? new Int16Array(buffer)
+        : new Uint16Array(buffer);
+
+      for (let i = 0; i < rows * cols && i < srcView.length; i++) {
+        volume[off + i] = Math.round(srcView[i] * slope + intercept);
+      }
+    } catch (e) {
+      console.warn(`Error reading CT slice ${s}: ${e.message}`);
+    }
+  }
+
+  return {
+    volume,
+    meta: {
+      rows, cols, nSlices,
+      pixelSpacing: Array.isArray(spacing) ? spacing : [spacing, spacing],
+      sliceSpacing,
+      origin: Array.isArray(origin) ? origin : [0, 0, 0],
+      orientation: Array.isArray(orientation) ? orientation : [1, 0, 0, 0, 1, 0],
+    },
+  };
+}
+
+
+// =============================================================================
+// Dose Grid Extraction (uses dcmjs naturalized dataset)
+// =============================================================================
+function extractDoseGrid(dataset) {
+  const rows = dataset.Rows;
+  const cols = dataset.Columns;
+  const nFrames = parseInt(dataset.NumberOfFrames) || 1;
+  const scaling = parseFloat(dataset.DoseGridScaling) || 1;
+  const offsets = dataset.GridFrameOffsetVector || [];
+  const spacing = dataset.PixelSpacing || [2.5, 2.5];
+  const origin = dataset.ImagePositionPatient || [0, 0, 0];
+  const orientation = dataset.ImageOrientationPatient || [1, 0, 0, 0, 1, 0];
+  const bitsAlloc = dataset.BitsAllocated || 32;
+  const pixelData = dataset.PixelData;
+
+  if (!pixelData) return null;
+
+  // Compute slice spacing from offsets
+  let sliceSpacing = 2.5;
+  if (Array.isArray(offsets) && offsets.length >= 2) {
+    sliceSpacing = Math.abs(offsets[1] - offsets[0]);
+  }
+
+  const totalVoxels = rows * cols * nFrames;
+  const doseGy = new Float32Array(totalVoxels);
+
+  // dcmjs returns PixelData as ArrayBuffer or array of ArrayBuffers
+  const buffer = Array.isArray(pixelData) ? pixelData[0] : pixelData;
+
+  if (bitsAlloc === 32) {
+    const srcView = new Uint32Array(buffer);
+    for (let i = 0; i < totalVoxels && i < srcView.length; i++) {
+      doseGy[i] = srcView[i] * scaling;
+    }
+  } else if (bitsAlloc === 16) {
+    const srcView = new Uint16Array(buffer);
+    for (let i = 0; i < totalVoxels && i < srcView.length; i++) {
+      doseGy[i] = srcView[i] * scaling;
+    }
+  }
+
+  return {
+    doseGy,
+    meta: {
+      rows, cols, nFrames,
+      pixelSpacing: Array.isArray(spacing) ? spacing : [spacing, spacing],
+      sliceSpacing,
+      origin: Array.isArray(origin) ? origin : [0, 0, 0],
+      orientation: Array.isArray(orientation) ? orientation : [1, 0, 0, 0, 1, 0],
+      gridFrameOffsets: Array.isArray(offsets) ? offsets : [],
+    },
+  };
+}
+
+
+// =============================================================================
+// Clinical Goal Evaluation
+// =============================================================================
+function evaluateClinicalGoals(templateObjectives, planDvhs, roiMapping, commonStructIds) {
+  // roiMapping: { templateStructId: roiNumber } for this plan
+  // planDvhs: { roiNumber: dvhObj }
+  const results = [];
+
+  templateObjectives.forEach(obj => {
+    if (!commonStructIds.includes(obj.structId)) return;
+
+    const roiNum = roiMapping[obj.structId];
+    if (roiNum === undefined || roiNum === null) return;
+
+    const dvh = planDvhs[roiNum];
+    if (!dvh) {
+      results.push({
+        structId: obj.structId,
+        ...formatGoalCriteria(obj),
+        value: 'No DVH',
+        status: 'unknown',
+        priority: obj.priority,
+      });
+      return;
+    }
+
+    let value = null;
+    let status = 'unknown';
+
+    if (obj.type === 'DoseVolume') {
+      // Look up dose at a given volume
+      value = lookupDoseAtVolume(dvh, obj.volume.value, obj.volume.unit);
+      if (value !== null) {
+        const goalDose = obj.dose.value;
+        if (obj.qualifier.includes('Less')) {
+          status = value <= goalDose ? 'pass' : 'fail';
+          if (status === 'fail' && obj.acceptableVariation?.dose) {
+            if (value <= obj.acceptableVariation.dose.value) status = 'marginal';
+          }
+        } else {
+          status = value >= goalDose ? 'pass' : 'fail';
+          if (status === 'fail' && obj.acceptableVariation?.dose) {
+            if (value >= obj.acceptableVariation.dose.value) status = 'marginal';
+          }
+        }
+      }
+    } else if (obj.type === 'VolumeDose') {
+      // Look up volume at a given dose
+      value = lookupVolumeAtDose(dvh, obj.dose.value, obj.dose.unit);
+      if (value !== null) {
+        const goalVol = obj.volume.value;
+        if (obj.qualifier.includes('Less')) {
+          status = value <= goalVol ? 'pass' : 'fail';
+          if (status === 'fail' && obj.acceptableVariation?.volume) {
+            if (value <= obj.acceptableVariation.volume.value) status = 'marginal';
+          }
+        } else {
+          status = value >= goalVol ? 'pass' : 'fail';
+          if (status === 'fail' && obj.acceptableVariation?.volume) {
+            if (value >= obj.acceptableVariation.volume.value) status = 'marginal';
+          }
+        }
+      }
+    } else if (obj.type === 'ConformityIndex') {
+      // Skip CI for now - requires additional data
+      value = null;
+      status = 'unknown';
+    }
+
+    const formatted = formatGoalCriteria(obj);
+    results.push({
+      structId: obj.structId,
+      structName: formatted.structName,
+      goalType: formatted.goalType,
+      criteria: formatted.criteria,
+      value: value !== null ? value.toFixed(2) : 'N/A',
+      status,
+      priority: obj.priority,
+    });
+  });
+
+  return results;
+}
+
+function lookupDoseAtVolume(dvh, volumeVal, volumeUnit) {
+  // DVH curve is differential: {dose, volume} pairs
+  // Convert to cumulative DVH first
+  const cumDvh = buildCumulativeDVH(dvh);
+  if (!cumDvh || cumDvh.length === 0) return null;
+
+  // Total volume is first cumulative point's volume (should be ~100% of structure)
+  const totalVol = cumDvh[0].volume;
+  if (totalVol <= 0) return null;
+
+  let targetVol;
+  if (volumeUnit === 'Relative') {
+    targetVol = (volumeVal / 100) * totalVol;
+  } else {
+    targetVol = volumeVal;  // Absolute cc
+  }
+
+  // Find dose where cumulative volume equals target
+  for (let i = 0; i < cumDvh.length - 1; i++) {
+    if (cumDvh[i].volume >= targetVol && cumDvh[i + 1].volume < targetVol) {
+      // Linear interpolation
+      const frac = (targetVol - cumDvh[i + 1].volume) / (cumDvh[i].volume - cumDvh[i + 1].volume);
+      return cumDvh[i].dose + frac * (cumDvh[i + 1].dose - cumDvh[i].dose);
+    }
+  }
+
+  // If target volume is larger than total, dose is 0
+  if (targetVol >= totalVol) return cumDvh[0].dose;
+  // If target volume is very small, return max dose
+  return cumDvh[cumDvh.length - 1].dose;
+}
+
+function lookupVolumeAtDose(dvh, doseVal, doseUnit) {
+  const cumDvh = buildCumulativeDVH(dvh);
+  if (!cumDvh || cumDvh.length === 0) return null;
+
+  const targetDose = doseVal;  // Assume absolute Gy for now
+
+  // Find volume at target dose
+  for (let i = 0; i < cumDvh.length - 1; i++) {
+    if (cumDvh[i].dose <= targetDose && cumDvh[i + 1].dose > targetDose) {
+      const frac = (targetDose - cumDvh[i].dose) / (cumDvh[i + 1].dose - cumDvh[i].dose);
+      return cumDvh[i].volume + frac * (cumDvh[i + 1].volume - cumDvh[i].volume);
+    }
+  }
+
+  if (targetDose <= cumDvh[0].dose) return cumDvh[0].volume;
+  return 0;
+}
+
+function buildCumulativeDVH(dvh) {
+  if (dvh.type === 'CUMULATIVE') {
+    return dvh.curve.map(p => ({ dose: p.dose, volume: p.volume }));
+  }
+
+  // Differential to cumulative
+  const curve = dvh.curve;
+  if (curve.length === 0) return [];
+
+  const cumulative = [];
+  let cumVol = 0;
+  // Sum from highest dose down
+  for (let i = curve.length - 1; i >= 0; i--) {
+    cumVol += curve[i].volume;
+    cumulative.unshift({ dose: curve[i].dose, volume: cumVol });
+  }
+  return cumulative;
+}
+
+
+// =============================================================================
+// Fuzzy Name Matching
+// =============================================================================
+function fuzzyMatch(templateName, roiNames) {
+  const tn = templateName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let bestScore = 0;
+  let bestName = '';
+
+  roiNames.forEach(name => {
+    const rn = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Exact match
+    if (rn === tn) { bestScore = 100; bestName = name; return; }
+
+    // Contains match
+    if (rn.includes(tn) || tn.includes(rn)) {
+      const score = 80 * Math.min(tn.length, rn.length) / Math.max(tn.length, rn.length);
+      if (score > bestScore) { bestScore = score; bestName = name; }
+    }
+
+    // Prefix match
+    const prefixLen = Math.min(tn.length, rn.length);
+    let matchLen = 0;
+    for (let i = 0; i < prefixLen; i++) {
+      if (tn[i] === rn[i]) matchLen++;
+      else break;
+    }
+    const prefixScore = 60 * matchLen / Math.max(tn.length, rn.length);
+    if (prefixScore > bestScore) { bestScore = prefixScore; bestName = name; }
+  });
+
+  return bestScore >= 40 ? bestName : '';
+}
+
+
+// =============================================================================
+// Identity Randomization
+// =============================================================================
+function randomizeIdentity(folderNames) {
+  const letters = ['A', 'B', 'C'];
+  // Fisher-Yates shuffle
+  for (let i = letters.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [letters[i], letters[j]] = [letters[j], letters[i]];
+  }
+  const map = {};
+  folderNames.forEach((name, idx) => { map[name] = letters[idx]; });
+  return map;
+}
+
+
+// =============================================================================
+// UI Event Handlers
+// =============================================================================
+
+// --- Site scanning ---
+document.getElementById('scan-sites-btn').addEventListener('click', () => {
+  // Since we can't scan the filesystem from browser, prompt user
+  App.notify('Enter site names in the dropdown or use the file picker to load a site config.', 'info');
+  // For now, add CARDIAC as known
+  const sel = document.getElementById('site-select');
+  if (sel.options.length <= 1) {
+    ['CARDIAC'].forEach(site => {
+      const opt = document.createElement('option');
+      opt.value = site;
+      opt.textContent = site;
+      sel.appendChild(opt);
+    });
+  }
+});
+
+// --- Template loading ---
+document.getElementById('template-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  App.templateXml = text;
+  const parsed = parseTemplateXml(text);
+  App.templateStructures = parsed.structures;
+  App.templateObjectives = parsed.objectives;
+
+  document.getElementById('template-info').classList.remove('hidden');
+  document.getElementById('template-info').innerHTML =
+    `<strong>Template:</strong> ${parsed.displayName} &mdash; ` +
+    `${parsed.structures.length} structures, ${parsed.objectives.length} clinical goals`;
+
+  document.getElementById('save-site-config-btn').disabled = false;
+});
+
+// --- Save site config ---
+document.getElementById('save-site-config-btn').addEventListener('click', () => {
+  const site = document.getElementById('site-select').value;
+  const reviewers = document.getElementById('reviewers-input').value
+    .split(',').map(s => s.trim()).filter(Boolean);
+
+  App.siteConfig = {
+    site,
+    templateName: App.templateXml ? 'loaded' : '',
+    reviewers,
+  };
+
+  document.getElementById('validate-btn').disabled = false;
+  App.notify('Site configuration saved.');
+});
+
+// --- Subject folder selection ---
+document.getElementById('subject-folder').addEventListener('change', () => {
+  document.getElementById('validate-btn').disabled = false;
+});
+
+// --- Validation ---
+document.getElementById('validate-btn').addEventListener('click', async () => {
+  const files = document.getElementById('subject-folder').files;
+  if (!files || files.length === 0) return;
+
+  // Clear previous state
+  document.getElementById('val-log').innerHTML = '';
+  document.getElementById('val-results').innerHTML = '';
+  document.getElementById('val-results').classList.add('hidden');
+
+  const logArea = 'val-log';
+
+  // Group files by top-level subfolder
+  const folders = {};
+  let subjectName = '';
+
+  for (const file of files) {
+    const parts = file.webkitRelativePath.split('/');
+    if (parts.length < 2) continue;
+    if (!subjectName) subjectName = parts[0];
+    const subfolder = parts[1];
+    if (!folders[subfolder]) folders[subfolder] = [];
+    folders[subfolder].push(file);
+  }
+
+  const folderNames = Object.keys(folders).filter(n => !n.startsWith('_'));
+  App.subjectPath = subjectName;
+  App.planFolders = folderNames;
+
+  App.log(logArea, `Subject: ${subjectName}`, 'log-info');
+  App.log(logArea, `Found ${folderNames.length} plan folders: ${folderNames.join(', ')}`, 'log-info');
+
+  // Validate: must have exactly 3
+  if (folderNames.length !== 3) {
+    App.log(logArea, `ERROR: Expected exactly 3 plan folders, found ${folderNames.length}`, 'log-err');
+    document.getElementById('validation-status').classList.remove('hidden');
+    document.getElementById('validation-status').innerHTML =
+      '<span class="badge badge-fail">INVALID: Need exactly 3 plan folders</span>';
+    return;
+  }
+
+  App.setProgress('val-progress', 0);
+  let planIdx = 0;
+  const allForUIDs = [];
+  App.planData = {};
+
+  for (const folder of folderNames) {
+    App.log(logArea, `\nProcessing: ${folder}`, 'log-info');
+    App.setProgress('val-progress', Math.round(((planIdx + 1) / 3) * 30));
+
+    try {
+      const classified = await classifyDicomFiles(folders[folder], logArea);
+      App.planData[folder] = classified;
+
+      // Check for required files
+      if (!classified.rs) App.log(logArea, `  WARNING: No RT Structure Set found`, 'log-warn');
+      if (!classified.rd) App.log(logArea, `  WARNING: No RT Dose found`, 'log-warn');
+      if (!classified.rp) App.log(logArea, `  WARNING: No RT Plan found`, 'log-warn');
+      if (classified.ct.length === 0) App.log(logArea, `  WARNING: No CT images found`, 'log-warn');
+
+      if (classified.forUID) {
+        allForUIDs.push({ folder, uid: classified.forUID });
+        App.log(logArea, `  Frame of Reference: ${classified.forUID}`, 'log-ok');
+      }
+    } catch (e) {
+      App.log(logArea, `  ERROR processing ${folder}: ${e.message}`, 'log-err');
+      App.planData[folder] = { ct: [], rs: null, rd: null, rp: null, forUID: null, errors: [e.message] };
+    }
+
+    planIdx++;
+  }
+
+  App.setProgress('val-progress', 35);
+
+  // Full-parse RS files via dcmjs to get structure names (needed for mapping UI)
+  App.log(logArea, `\nParsing structure sets (this may take a moment)...`, 'log-info');
+  for (let i = 0; i < folderNames.length; i++) {
+    const folder = folderNames[i];
+    const d = App.planData[folder];
+    App.setProgress('val-progress', 35 + Math.round(((i + 1) / folderNames.length) * 30));
+
+    if (d.rs && d.rs.file) {
+      try {
+        App.log(logArea, `  Parsing RS: ${folder}...`, 'log-info');
+        const rsDataset = await fullParseDicom(d.rs.file);
+        d.structures = parseStructureSet(rsDataset);
+        App.log(logArea, `  Structures (${d.structures.length}): ${d.structures.map(s => s.name).join(', ')}`, 'log-ok');
+      } catch (e) {
+        App.log(logArea, `  ERROR parsing RS for ${folder}: ${e.message}`, 'log-err');
+        d.structures = [];
+      }
+    }
+
+    if (d.rd && d.rd.file) {
+      try {
+        App.log(logArea, `  Parsing RD: ${folder}...`, 'log-info');
+        const rdDataset = await fullParseDicom(d.rd.file);
+        d.dvhs = extractDVH(rdDataset);
+        d.rdDataset = rdDataset;  // keep for dose grid extraction later
+        App.dvhData[folder] = d.dvhs;
+        App.log(logArea, `  DVH curves: ${Object.keys(d.dvhs).length}`, 'log-ok');
+      } catch (e) {
+        App.log(logArea, `  ERROR parsing RD for ${folder}: ${e.message}`, 'log-err');
+        d.dvhs = {};
+      }
+    }
+  }
+
+  App.setProgress('val-progress', 75);
+
+  // Frame of Reference validation
+  const uniqueFORs = new Set(allForUIDs.map(f => f.uid));
+  const forValid = uniqueFORs.size === 1;
+
+  if (forValid) {
+    App.log(logArea, `\nFrame of Reference: ALL MATCH`, 'log-ok');
+  } else {
+    App.log(logArea, `\nFrame of Reference: MISMATCH!`, 'log-err');
+    allForUIDs.forEach(f => App.log(logArea, `  ${f.folder}: ${f.uid}`, 'log-err'));
+  }
+
+  // Build validation result cards
+  const resultsDiv = document.getElementById('val-results');
+  resultsDiv.classList.remove('hidden');
+  resultsDiv.innerHTML = '';
+
+  // FOR card
+  const forCard = document.createElement('div');
+  forCard.className = `val-card ${forValid ? 'pass' : 'fail'}`;
+  forCard.innerHTML = `<h4>Frame of Reference</h4>
+    <span class="badge ${forValid ? 'badge-pass' : 'badge-fail'}">${forValid ? 'MATCH' : 'MISMATCH'}</span>
+    <div class="detail">${uniqueFORs.size === 1 ? [...uniqueFORs][0].substring(0, 40) + '...' : 'Multiple UIDs detected'}</div>`;
+  resultsDiv.appendChild(forCard);
+
+  // Per-plan cards
+  folderNames.forEach(folder => {
+    const d = App.planData[folder];
+    const ok = d.ct.length > 0 && d.rs && d.rd && d.rp;
+    const card = document.createElement('div');
+    card.className = `val-card ${ok ? 'pass' : 'fail'}`;
+    card.innerHTML = `<h4>${folder}</h4>
+      <span class="badge ${ok ? 'badge-pass' : 'badge-fail'}">${ok ? 'VALID' : 'INCOMPLETE'}</span>
+      <div class="detail">
+        CT: ${d.ct.length} slices (${d.ct.length > 0 ? d.ct[0].rows + 'x' + d.ct[0].cols : 'none'})<br>
+        RS: ${d.rs ? 'Yes' : 'Missing'} | RD: ${d.rd ? 'Yes' : 'Missing'} | RP: ${d.rp ? 'Yes' : 'Missing'}<br>
+        ${d.structures ? d.structures.length + ' structures' : ''} |
+        ${d.dvhs ? Object.keys(d.dvhs).length + ' DVH curves' : ''}
+      </div>`;
+    resultsDiv.appendChild(card);
+  });
+
+  App.setProgress('val-progress', 100);
+
+  // Status
+  const allValid = forValid && folderNames.every(f => {
+    const d = App.planData[f];
+    return d.ct.length > 0 && d.rs && d.rd;
+  });
+
+  document.getElementById('validation-status').classList.remove('hidden');
+  document.getElementById('validation-status').innerHTML = allValid
+    ? '<span class="badge badge-pass">Subject is VALID</span>'
+    : '<span class="badge badge-fail">Subject has ISSUES — see details</span>';
+
+  if (allValid && App.templateStructures.length > 0) {
+    buildMappingUI();
+    document.getElementById('panel-mapping').classList.remove('hidden');
+    App.log(logArea, `\nContour mapping panel is now available below.`, 'log-ok');
+  } else if (allValid && App.templateStructures.length === 0) {
+    App.log(logArea, `\nSubject is valid. Load a clinical goal template (Step 1) to enable contour mapping.`, 'log-warn');
+  }
+
+  // Generate identity map
+  App.identityMap = randomizeIdentity(folderNames);
+
+  App.log(logArea, `\nValidation complete.`, 'log-ok');
+});
+
+
+// =============================================================================
+// Contour Mapping UI
+// =============================================================================
+function buildMappingUI() {
+  const tbody = document.getElementById('mapping-tbody');
+  tbody.innerHTML = '';
+
+  // Get ROI names per plan
+  const planRois = {};
+  App.planFolders.forEach(folder => {
+    const d = App.planData[folder];
+    planRois[folder] = d.structures ? d.structures.map(s => s.name) : [];
+  });
+
+  // Update table header with actual plan folder names
+  const headerRow = document.querySelector('#mapping-table thead tr');
+  headerRow.innerHTML = `
+    <th>Template Structure</th>
+    <th>${App.planFolders[0]}</th>
+    <th>${App.planFolders[1]}</th>
+    <th>${App.planFolders[2]}</th>
+    <th>Status</th>
+  `;
+
+  // Build rows for each template structure
+  App.templateStructures.forEach(ts => {
+    const tr = document.createElement('tr');
+    tr.dataset.templateId = ts.id;
+
+    // Template structure cell
+    const tdName = document.createElement('td');
+    tdName.innerHTML = `<span class="struct-color" style="background:${ts.color}"></span>
+      <strong>${ts.name}</strong>
+      <span style="font-size:11px;color:var(--text-dim);margin-left:4px">(${ts.category})</span>`;
+    tr.appendChild(tdName);
+
+    // Plan mapping dropdowns
+    App.planFolders.forEach(folder => {
+      const td = document.createElement('td');
+      const sel = document.createElement('select');
+      sel.className = 'mapping-select';
+      sel.dataset.templateId = ts.id;
+      sel.dataset.planFolder = folder;
+
+      const optNone = document.createElement('option');
+      optNone.value = '';
+      optNone.textContent = '— None —';
+      sel.appendChild(optNone);
+
+      planRois[folder].forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      });
+
+      sel.addEventListener('change', updateMappingStatus);
+      td.appendChild(sel);
+      tr.appendChild(td);
+    });
+
+    // Status cell
+    const tdStatus = document.createElement('td');
+    tdStatus.className = 'mapping-status';
+    tr.appendChild(tdStatus);
+
+    tbody.appendChild(tr);
+  });
+
+  updateMappingStatus();
+}
+
+function updateMappingStatus() {
+  const rows = document.querySelectorAll('#mapping-tbody tr');
+  let commonCount = 0;
+  let partialCount = 0;
+  App.commonStructures = [];
+
+  rows.forEach(tr => {
+    const selects = tr.querySelectorAll('.mapping-select');
+    const mappedCount = [...selects].filter(s => s.value !== '').length;
+    const statusCell = tr.querySelector('.mapping-status');
+
+    if (mappedCount === 3) {
+      statusCell.innerHTML = '<span class="common-indicator common-yes">All 3</span>';
+      tr.classList.remove('excluded');
+      App.commonStructures.push(tr.dataset.templateId);
+      commonCount++;
+    } else if (mappedCount > 0) {
+      statusCell.innerHTML = `<span class="common-indicator common-no">${mappedCount}/3</span>`;
+      tr.classList.add('excluded');
+      partialCount++;
+    } else {
+      statusCell.innerHTML = '<span style="color:var(--text-dim)">—</span>';
+      tr.classList.add('excluded');
+    }
+  });
+
+  document.getElementById('mapping-summary').innerHTML =
+    `<span class="badge badge-pass">${commonCount} structures mapped in all 3 plans</span> ` +
+    (partialCount > 0 ? `<span class="badge badge-warn">${partialCount} partially mapped (excluded)</span>` : '');
+
+  document.getElementById('apply-mapping-btn').disabled = commonCount === 0;
+}
+
+// --- Auto-match ---
+document.getElementById('auto-map-btn').addEventListener('click', () => {
+  const selects = document.querySelectorAll('.mapping-select');
+  selects.forEach(sel => {
+    const templateId = sel.dataset.templateId;
+    const ts = App.templateStructures.find(s => s.id === templateId);
+    if (!ts) return;
+
+    const options = [...sel.options].map(o => o.value).filter(Boolean);
+    const match = fuzzyMatch(ts.name, options);
+    if (match) sel.value = match;
+  });
+  updateMappingStatus();
+  App.notify('Auto-matching complete. Review and adjust as needed.');
+});
+
+// --- Apply mapping & evaluate goals ---
+document.getElementById('apply-mapping-btn').addEventListener('click', () => {
+  // Collect mappings
+  App.contourMappings = {};
+  const rows = document.querySelectorAll('#mapping-tbody tr');
+
+  rows.forEach(tr => {
+    const templateId = tr.dataset.templateId;
+    const selects = tr.querySelectorAll('.mapping-select');
+    const mapping = {};
+    selects.forEach((sel, idx) => {
+      mapping[App.planFolders[idx]] = sel.value || null;
+    });
+    App.contourMappings[templateId] = mapping;
+  });
+
+  // Evaluate clinical goals
+  if (App.templateObjectives) {
+    evaluateAllGoals();
+    document.getElementById('panel-goals').classList.remove('hidden');
+  }
+
+  // Show export panel
+  displayIdentityMap();
+  document.getElementById('panel-export').classList.remove('hidden');
+  document.getElementById('export-btn').disabled = false;
+
+  App.notify('Mappings applied. Clinical goals evaluated.');
+});
+
+
+// =============================================================================
+// Clinical Goals Display
+// =============================================================================
+function evaluateAllGoals() {
+  const tbody = document.getElementById('goals-tbody');
+  tbody.innerHTML = '';
+
+  // Build ROI number mapping for each plan
+  const planResults = {};
+
+  App.planFolders.forEach(folder => {
+    const d = App.planData[folder];
+    if (!d.structures || !d.dvhs) return;
+
+    // Map template struct ID -> ROI number in this plan
+    const roiMapping = {};
+    App.commonStructures.forEach(templateId => {
+      const mappedName = App.contourMappings[templateId]?.[folder];
+      if (!mappedName) return;
+      const roi = d.structures.find(s => s.name === mappedName);
+      if (roi) roiMapping[templateId] = roi.number;
+    });
+
+    const results = evaluateClinicalGoals(
+      App.templateObjectives, d.dvhs, roiMapping, App.commonStructures
+    );
+    planResults[folder] = results;
+  });
+
+  // Group by priority and display
+  const allPriorities = new Set();
+  Object.values(planResults).forEach(results => {
+    results.forEach(r => allPriorities.add(r.priority));
+  });
+
+  [...allPriorities].sort((a, b) => a - b).forEach(priority => {
+    // Priority header
+    const headerRow = document.createElement('tr');
+    headerRow.className = 'priority-header';
+    headerRow.innerHTML = `<td colspan="6">Priority ${priority}</td>`;
+    tbody.appendChild(headerRow);
+
+    // Get goals for this priority from first plan (structure is same across plans)
+    const firstPlan = App.planFolders[0];
+    const goals = (planResults[firstPlan] || []).filter(r => r.priority === priority);
+
+    goals.forEach((goal, gIdx) => {
+      const tr = document.createElement('tr');
+
+      tr.innerHTML = `<td>${goal.structName}</td>
+        <td>${goal.goalType}</td>
+        <td>${goal.criteria}</td>`;
+
+      // Add result for each plan
+      App.planFolders.forEach(folder => {
+        const planGoals = planResults[folder] || [];
+        const match = planGoals.filter(r => r.priority === priority)[gIdx];
+        const td = document.createElement('td');
+        if (match) {
+          const cls = match.status === 'pass' ? 'goal-pass'
+            : match.status === 'marginal' ? 'goal-marginal'
+            : match.status === 'fail' ? 'goal-fail' : '';
+          td.className = cls;
+          td.textContent = match.value;
+        } else {
+          td.textContent = 'N/A';
+        }
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+  });
+
+  // Store for export
+  App.clinicalGoals = planResults;
+}
+
+
+// =============================================================================
+// Identity Map Display
+// =============================================================================
+function displayIdentityMap() {
+  const container = document.getElementById('identity-display');
+  container.innerHTML = '';
+
+  const cardsDiv = document.createElement('div');
+  cardsDiv.className = 'identity-cards';
+
+  // Sort by assigned letter
+  const entries = Object.entries(App.identityMap).sort((a, b) => a[1].localeCompare(b[1]));
+
+  entries.forEach(([folder, letter]) => {
+    const card = document.createElement('div');
+    card.className = 'id-card';
+    card.innerHTML = `<div class="plan-letter">Plan ${letter}</div>
+      <div class="plan-folder">${folder}</div>`;
+    cardsDiv.appendChild(card);
+  });
+
+  container.appendChild(cardsDiv);
+}
+
+document.getElementById('re-randomize-btn').addEventListener('click', () => {
+  App.identityMap = randomizeIdentity(App.planFolders);
+  displayIdentityMap();
+  App.notify('Plan identities re-randomized.');
+});
+
+
+// =============================================================================
+// Export Pre-processed Data
+// =============================================================================
+document.getElementById('export-btn').addEventListener('click', async () => {
+  const logArea = 'export-log';
+  document.getElementById('export-log').innerHTML = '';
+
+  App.log(logArea, 'Starting export...', 'log-info');
+  App.setProgress('export-progress', 0);
+
+  // Build the manifest
+  const manifest = {
+    subject: App.subjectPath,
+    site: App.siteConfig?.site || 'UNKNOWN',
+    validatedAt: new Date().toISOString(),
+    identityMap: App.identityMap,
+    planFolders: App.planFolders,
+    commonStructures: App.commonStructures,
+    contourMappings: App.contourMappings,
+    templateName: App.templateXml ? 'loaded' : '',
+  };
+
+  // Build CT volume from first plan
+  const firstFolder = App.planFolders[0];
+  const ctSlices = App.planData[firstFolder].ct;
+  App.log(logArea, `Building CT volume from ${ctSlices.length} slices (full parse via dcmjs)...`, 'log-info');
+  App.setProgress('export-progress', 5);
+
+  const ctResult = await buildCTVolume(ctSlices, (done, total) => {
+    App.log(logArea, `  CT slice ${done}/${total}...`, 'log-info');
+    App.setProgress('export-progress', 5 + Math.round((done / total) * 15));
+  });
+  if (!ctResult) {
+    App.log(logArea, 'ERROR: Failed to build CT volume', 'log-err');
+    return;
+  }
+
+  App.log(logArea, `CT volume: ${ctResult.meta.cols}x${ctResult.meta.rows}x${ctResult.meta.nSlices}`, 'log-ok');
+
+  // Compress CT volume
+  App.log(logArea, 'Compressing CT volume...', 'log-info');
+  App.setProgress('export-progress', 20);
+  const ctCompressed = pako.gzip(new Uint8Array(ctResult.volume.buffer));
+  App.log(logArea, `CT compressed: ${(ctCompressed.length / 1024 / 1024).toFixed(1)} MB`, 'log-ok');
+
+  // Build dose grids and structures for each plan
+  const planExports = {};
+
+  for (let i = 0; i < App.planFolders.length; i++) {
+    const folder = App.planFolders[i];
+    const letter = App.identityMap[folder];
+    const d = App.planData[folder];
+
+    App.log(logArea, `\nProcessing Plan ${letter} (${folder})...`, 'log-info');
+    App.setProgress('export-progress', 30 + i * 20);
+
+    // Dose grid
+    let doseExport = null;
+    if (d.rdDataset) {
+      App.log(logArea, '  Extracting dose grid...', 'log-info');
+      doseExport = extractDoseGrid(d.rdDataset);
+      if (doseExport) {
+        const doseCompressed = pako.gzip(new Uint8Array(doseExport.doseGy.buffer));
+        doseExport.compressed = doseCompressed;
+        App.log(logArea, `  Dose grid: ${doseExport.meta.cols}x${doseExport.meta.rows}x${doseExport.meta.nFrames}`, 'log-ok');
+        App.log(logArea, `  Dose compressed: ${(doseCompressed.length / 1024 / 1024).toFixed(1)} MB`, 'log-ok');
+      }
+    }
+
+    // Mapped structures (contour data)
+    const mappedStructures = [];
+    App.commonStructures.forEach(templateId => {
+      const mappedName = App.contourMappings[templateId]?.[folder];
+      if (!mappedName || !d.structures) return;
+      const roi = d.structures.find(s => s.name === mappedName);
+      if (!roi) return;
+
+      const ts = App.templateStructures.find(s => s.id === templateId);
+      mappedStructures.push({
+        templateId,
+        templateName: ts?.name || templateId,
+        templateColor: ts?.color || '#888',
+        contours: roi.contours,
+      });
+    });
+
+    // DVH data (for common structures only)
+    const dvhExport = {};
+    App.commonStructures.forEach(templateId => {
+      const mappedName = App.contourMappings[templateId]?.[folder];
+      if (!mappedName || !d.structures || !d.dvhs) return;
+      const roi = d.structures.find(s => s.name === mappedName);
+      if (!roi || !d.dvhs[roi.number]) return;
+
+      const ts = App.templateStructures.find(s => s.id === templateId);
+      dvhExport[templateId] = {
+        templateName: ts?.name || templateId,
+        ...d.dvhs[roi.number],
+      };
+    });
+
+    // Clinical goals
+    const goalExport = App.clinicalGoals[folder] || [];
+
+    planExports[letter] = {
+      folder,
+      dose: doseExport,
+      structures: mappedStructures,
+      dvh: dvhExport,
+      clinicalGoals: goalExport,
+    };
+
+    App.log(logArea, `  Structures: ${mappedStructures.length}, DVH curves: ${Object.keys(dvhExport).length}`, 'log-ok');
+  }
+
+  App.setProgress('export-progress', 85);
+
+  // Upload files to server (writes directly to _processed/ directory)
+  const site = App.siteConfig?.site || 'UNKNOWN';
+  const subject = App.subjectPath;
+
+  async function uploadJSON(fileName, data) {
+    const resp = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site, subject, fileName, data: JSON.stringify(data), encoding: 'text' }),
+    });
+    if (!resp.ok) throw new Error(`Upload failed: ${fileName} (${resp.status})`);
+    return await resp.json();
+  }
+
+  async function uploadBinaryDirect(fileName, uint8Array) {
+    // Use direct binary POST — no base64 encoding needed
+    const url = `/api/upload-binary/${encodeURIComponent(site)}/${encodeURIComponent(subject)}/${fileName}`;
+    App.log(logArea, `  Uploading ${(uint8Array.length / 1024 / 1024).toFixed(1)} MB...`, 'log-info');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: uint8Array,
+    });
+    if (!resp.ok) throw new Error(`Binary upload failed: ${fileName} (${resp.status})`);
+    return await resp.json();
+  }
+
+  try {
+    // 1. manifest.json (lightweight — just metadata, no embedded plan data)
+    App.log(logArea, '\nUploading manifest.json...', 'log-info');
+    await uploadJSON('manifest.json', manifest);
+    App.log(logArea, '  Saved manifest.json', 'log-ok');
+
+    // 2. CT metadata
+    await uploadJSON('ct_meta.json', ctResult.meta);
+    App.log(logArea, '  Saved ct_meta.json', 'log-ok');
+
+    // 3. CT volume binary (direct binary upload — no base64)
+    App.log(logArea, 'Uploading CT volume...', 'log-info');
+    await uploadBinaryDirect('ct_volume.bin.gz', ctCompressed);
+    App.log(logArea, `  Saved ct_volume.bin.gz (${(ctCompressed.length / 1024 / 1024).toFixed(1)} MB)`, 'log-ok');
+
+    App.setProgress('export-progress', 90);
+
+    // 4. Per-plan data
+    for (const letter of ['A', 'B', 'C']) {
+      const pe = planExports[letter];
+      if (!pe) continue;
+
+      App.log(logArea, `\nUploading Plan ${letter} data...`, 'log-info');
+
+      // Dose metadata
+      if (pe.dose?.meta) {
+        await uploadJSON(`plan_${letter}/dose_meta.json`, pe.dose.meta);
+        App.log(logArea, `  Saved plan_${letter}/dose_meta.json`, 'log-ok');
+      }
+
+      // Dose binary (direct binary upload)
+      if (pe.dose?.compressed) {
+        await uploadBinaryDirect(`plan_${letter}/dose.bin.gz`, pe.dose.compressed);
+        App.log(logArea, `  Saved plan_${letter}/dose.bin.gz (${(pe.dose.compressed.length / 1024 / 1024).toFixed(1)} MB)`, 'log-ok');
+      }
+
+      // Structures
+      await uploadJSON(`plan_${letter}/structures.json`, pe.structures);
+      App.log(logArea, `  Saved plan_${letter}/structures.json`, 'log-ok');
+
+      // DVH
+      await uploadJSON(`plan_${letter}/dvh.json`, pe.dvh);
+      App.log(logArea, `  Saved plan_${letter}/dvh.json`, 'log-ok');
+
+      // Clinical goals
+      await uploadJSON(`plan_${letter}/clinical_goals.json`, pe.clinicalGoals);
+      App.log(logArea, `  Saved plan_${letter}/clinical_goals.json`, 'log-ok');
+    }
+
+    App.setProgress('export-progress', 100);
+    App.log(logArea, `\nExport complete! Files saved to SITES/${site}/${subject}/_processed/`, 'log-ok');
+    App.notify('Export complete! Data saved to _processed directory.');
+
+  } catch (e) {
+    App.log(logArea, `\nUpload error: ${e.message}`, 'log-err');
+    App.log(logArea, 'Is the local server (serve.py) running? Start it with start_server.bat.', 'log-warn');
+    App.notify('Export failed — see log for details.', 'error');
+  }
+});
+
+
+// =============================================================================
+// Ranking Aggregation (Step 6)
+// =============================================================================
+
+// Populate site dropdown for aggregation (mirrors step 1)
+document.getElementById('scan-sites-btn').addEventListener('click', () => {
+  const aggSel = document.getElementById('agg-site-select');
+  const mainSel = document.getElementById('site-select');
+  aggSel.innerHTML = '<option value="">— Select —</option>';
+  [...mainSel.options].forEach(opt => {
+    if (opt.value) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.textContent;
+      aggSel.appendChild(o);
+    }
+  });
+});
+
+document.getElementById('load-rankings-btn').addEventListener('click', async () => {
+  const site = document.getElementById('agg-site-select').value;
+  if (!site) { App.notify('Select a site first.', 'error'); return; }
+
+  const tbody = document.getElementById('rankings-tbody');
+  tbody.innerHTML = '';
+
+  try {
+    // Get all subjects for this site
+    const subjResp = await fetch(`/api/subjects?site=${encodeURIComponent(site)}`);
+    const subjData = await subjResp.json();
+    const subjects = (subjData.subjects || []).filter(s => s.hasManifest);
+
+    App.aggData = []; // store for CSV export
+
+    for (const subj of subjects) {
+      // Load manifest to get identity map
+      let identityMap = {};
+      try {
+        const mResp = await fetch(`SITES/${site}/${subj.name}/_processed/manifest.json`);
+        const manifest = await mResp.json();
+        identityMap = manifest.identityMap || {};
+      } catch (e) { /* no manifest */ }
+
+      // Reverse the identity map: A -> actual folder name
+      const reverseMap = {};
+      Object.entries(identityMap).forEach(([folder, letter]) => {
+        reverseMap[letter] = folder;
+      });
+
+      // Find all ranking files for this subject
+      // We need to scan — ask server for rankings
+      const reviewers = App.siteConfig?.reviewers || ['Reviewer 1', 'Reviewer 2'];
+      for (const reviewer of reviewers) {
+        try {
+          const rResp = await fetch(
+            `/api/ranking?site=${encodeURIComponent(site)}&subject=${encodeURIComponent(subj.name)}&reviewer=${encodeURIComponent(reviewer)}`
+          );
+          const rData = await rResp.json();
+          if (!rData.exists) continue;
+
+          const r = rData.ranking;
+          const row = document.createElement('tr');
+
+          const rankA = r.rankings?.A || '—';
+          const rankB = r.rankings?.B || '—';
+          const rankC = r.rankings?.C || '—';
+          const actualA = reverseMap['A'] || '?';
+          const actualB = reverseMap['B'] || '?';
+          const actualC = reverseMap['C'] || '?';
+
+          row.innerHTML = `
+            <td><strong>${subj.name}</strong></td>
+            <td>${reviewer}</td>
+            <td>${rankA} <span style="color:var(--text-dim);font-size:10px">(${actualA})</span></td>
+            <td>${rankB} <span style="color:var(--text-dim);font-size:10px">(${actualB})</span></td>
+            <td>${rankC} <span style="color:var(--text-dim);font-size:10px">(${actualC})</span></td>
+            <td>${r.tiedRankings ? 'Yes' : 'No'}</td>
+            <td>${r.notes || ''}</td>
+            <td style="font-size:10px">${new Date(r.timestamp).toLocaleString()}</td>
+          `;
+          tbody.appendChild(row);
+
+          App.aggData.push({
+            subject: subj.name,
+            reviewer,
+            rankA, actualA,
+            rankB, actualB,
+            rankC, actualC,
+            tied: r.tiedRankings ? 'Yes' : 'No',
+            notes: r.notes || '',
+            timestamp: r.timestamp,
+          });
+        } catch (e) { /* no ranking for this reviewer */ }
+      }
+    }
+
+    document.getElementById('export-rankings-btn').disabled = App.aggData.length === 0;
+    if (App.aggData.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-dim)">No rankings found.</td></tr>';
+    }
+    App.notify(`Loaded ${App.aggData.length} rankings.`);
+
+  } catch (e) {
+    App.notify(`Error loading rankings: ${e.message}`, 'error');
+  }
+});
+
+document.getElementById('export-rankings-btn').addEventListener('click', () => {
+  if (!App.aggData || App.aggData.length === 0) return;
+
+  const headers = ['Subject','Reviewer','Rank_A','Actual_A','Rank_B','Actual_B','Rank_C','Actual_C','Tied','Notes','Timestamp'];
+  const rows = App.aggData.map(d => [
+    d.subject, d.reviewer, d.rankA, d.actualA, d.rankB, d.actualB, d.rankC, d.actualC, d.tied, `"${(d.notes||'').replace(/"/g,'""')}"`, d.timestamp,
+  ].join(','));
+
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `rankings_${document.getElementById('agg-site-select').value}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  App.notify('Rankings exported as CSV.');
+});
+
+</script>
+</body>
+</html>
