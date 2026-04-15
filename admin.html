@@ -368,23 +368,19 @@
   <!-- Step 1: Site Configuration -->
   <div class="panel" id="panel-site">
     <h2><span class="step-num">1</span> Site Configuration</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">
+      Reviewers are configured globally via <code style="background:#2a2a2a;padding:2px 5px;border-radius:3px">reviewers.json</code> in the viewer root directory.
+    </p>
     <div class="form-row">
       <div class="form-group">
         <label>Anatomical Site</label>
         <select id="site-select">
-          <option value="">— Select or scan for sites —</option>
+          <option value="">— Loading… —</option>
         </select>
       </div>
-      <button class="btn btn-outline" id="scan-sites-btn" title="Scan SITES/ directory for available sites">Scan Sites</button>
       <div class="form-group">
         <label>Clinical Goal Template</label>
         <input type="file" id="template-file" accept=".xml">
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Reviewers (comma-separated)</label>
-        <input type="text" id="reviewers-input" value="Reviewer 1, Reviewer 2" style="min-width:400px">
       </div>
       <button class="btn btn-primary" id="save-site-config-btn" disabled>Save Site Config</button>
     </div>
@@ -484,6 +480,15 @@
 
     <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
+    <h3 style="font-size:13px;font-weight:600;margin-bottom:8px">Clinical Context</h3>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px">
+      Free-text clinical information shown to reviewers (e.g., diagnosis, target description, special planning considerations).
+    </p>
+    <textarea id="clinical-context" rows="5" placeholder="e.g., 65yo male with refractory ventricular tachycardia. Target: LV scar-based substrate..."
+      style="width:100%;padding:8px 10px;background:#fff;border:1px solid #ccc;border-radius:4px;color:var(--text);font-size:13px;font-family:inherit;resize:vertical"></textarea>
+
+    <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
+
     <h3 style="font-size:13px;font-weight:600;margin-bottom:8px">Identity Randomization</h3>
     <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px">
       Random A/B/C assignment for blinded review. This mapping is fixed per subject.
@@ -516,7 +521,21 @@
     </div>
     <div class="table-scroll" style="margin-top:12px">
       <table class="goals-table" id="rankings-table">
-        <thead><tr><th>Subject</th><th>Reviewer</th><th>Plan A (actual)</th><th>Plan B (actual)</th><th>Plan C (actual)</th><th>Tied?</th><th>Notes</th><th>Submitted</th></tr></thead>
+        <thead>
+          <tr>
+            <th rowspan="2">Subject</th>
+            <th rowspan="2">Reviewer</th>
+            <th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">Phase 1 (blinded)</th>
+            <th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">Phase 2 (revealed)</th>
+            <th rowspan="2">Changed?</th>
+            <th rowspan="2">Notes</th>
+            <th rowspan="2">Submitted</th>
+          </tr>
+          <tr>
+            <th>A (actual)</th><th>B (actual)</th><th>C (actual)</th>
+            <th>A</th><th>B</th><th>C</th>
+          </tr>
+        </thead>
         <tbody id="rankings-tbody"></tbody>
       </table>
     </div>
@@ -1087,7 +1106,107 @@ async function fullParseDicom(file) {
   const buf = await file.arrayBuffer();
   const dicomData = dcmjs.data.DicomMessage.readFile(buf);
   const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicomData.dict);
+  // Stash the raw buffer on the returned object so Halcyon MLC extraction
+  // can do a targeted scan that dcmjs misses for (300A,03A4) sequences.
+  dataset._rawBuffer = buf;
   return dataset;
+}
+
+
+// =============================================================================
+// Halcyon MLC position scanner
+// ----------------------------------------------------------------------------
+// dcmjs silently drops the EnhancedRTBeamLimitingOpeningSequence (300A,03A4)
+// because it can't handle its VR. We scan the raw DICOM buffer for the
+// ParallelRTBeamDelimiterPositions tag (300A,0356) directly.
+// Each Halcyon control point contains 2 instances of this tag (one per MLC
+// layer). Returns an array of leaf position arrays in FILE ORDER.
+// =============================================================================
+function scanHalcyonMLCs(buffer) {
+  if (!buffer) return [];
+  const dv = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.length;
+
+  // Tag (300A,064A) ParallelRTBeamDelimiterPositions in little-endian:
+  // group=0x300A (0A 30), element=0x064A (4A 06)
+  const results = [];
+  let tagsMatched = 0;
+  const diagSamples = [];
+
+  for (let i = 0; i + 12 <= len; i++) {
+    if (bytes[i]   !== 0x0A) continue;
+    if (bytes[i+1] !== 0x30) continue;
+    if (bytes[i+2] !== 0x4A) continue;
+    if (bytes[i+3] !== 0x06) continue;
+
+    tagsMatched++;
+    if (diagSamples.length < 3) {
+      // Dump the next 12 bytes after the tag for diagnosis
+      const dump = [];
+      for (let k = 0; k < 12 && i+4+k < len; k++) {
+        dump.push(bytes[i+4+k].toString(16).padStart(2, '0'));
+      }
+      diagSamples.push({ offset: i, bytesAfterTag: dump.join(' ') });
+    }
+
+    // Try BOTH VR formats — explicit VR (FD + 2-byte length) AND
+    // long-form VR (e.g., OD + reserved + 4-byte length) AND implicit VR (4-byte length only)
+    let vlen = -1;
+    let dataStart = -1;
+
+    // Case A: explicit VR 'FD' (short length)
+    if (bytes[i+4] === 0x46 && bytes[i+5] === 0x44) {
+      vlen = dv.getUint16(i + 6, true);
+      dataStart = i + 8;
+    }
+    // Case B: explicit VR 'OD' (long length with reserved)
+    else if (bytes[i+4] === 0x4F && bytes[i+5] === 0x44) {
+      vlen = dv.getUint32(i + 8, true);
+      dataStart = i + 12;
+    }
+    // Case C: explicit VR 'OB' or 'UN' (long length with reserved)
+    else if ((bytes[i+4] === 0x4F && bytes[i+5] === 0x42) ||
+             (bytes[i+4] === 0x55 && bytes[i+5] === 0x4E)) {
+      vlen = dv.getUint32(i + 8, true);
+      dataStart = i + 12;
+    }
+    // Case D: implicit VR (4-byte length directly after tag)
+    else {
+      // Check if bytes at i+4 look like ASCII VR letters; if not, assume implicit
+      const b4 = bytes[i+4], b5 = bytes[i+5];
+      const isVR = b4 >= 0x41 && b4 <= 0x5A && b5 >= 0x41 && b5 <= 0x5A;
+      if (!isVR) {
+        vlen = dv.getUint32(i + 4, true);
+        dataStart = i + 8;
+      }
+    }
+
+    if (vlen < 40 || vlen > 8000 || dataStart < 0) continue;
+    if (dataStart + vlen > len) continue;
+    if (vlen % 8 !== 0) continue; // must be multiple of 8 for doubles
+
+    const n = vlen / 8;
+    const positions = new Array(n);
+    let allFinite = true;
+    for (let k = 0; k < n; k++) {
+      const v = dv.getFloat64(dataStart + k * 8, true);
+      if (!isFinite(v) || Math.abs(v) > 1e6) { allFinite = false; break; }
+      positions[k] = v;
+    }
+    if (!allFinite) continue;
+
+    results.push({ offset: i, positions });
+
+    // Skip past this tag
+    i = dataStart + vlen - 1;
+  }
+
+  console.log(`[MLC scan] Tag (300A,064A) ParallelRTBeamDelimiterPositions occurrences: ${tagsMatched}, usable arrays: ${results.length}`);
+  if (tagsMatched > 0 && results.length === 0) {
+    console.log('[MLC scan] Bytes-after-tag samples (hex):', diagSamples);
+  }
+  return results;
 }
 
 
@@ -1143,6 +1262,299 @@ function parseStructureSet(dataset) {
 // =============================================================================
 // RT Plan Prescription Extraction (uses dcmjs naturalized dataset)
 // =============================================================================
+// =============================================================================
+// Plan Parameters (arcs, MU, delivery time, limiting axis)
+// =============================================================================
+
+// Machine speed constants. Matched by TreatmentMachineName via MACHINE_LOOKUP.
+const MACHINE_DEFAULTS = {
+  Halcyon:  { max_gantry_dps: 8.0, max_mlc_mmps: 50.0, overhead_s: 20 },
+  TrueBeam: { max_gantry_dps: 6.0, max_mlc_mmps: 25.0, overhead_s: 30 },
+};
+const MACHINE_LOOKUP = {
+  'EthosADSTestID': 'Halcyon',  // test data
+  // Add more mappings here as needed for real machine names
+};
+
+function detectMachineType(treatmentMachineName, modelName) {
+  const explicit = MACHINE_LOOKUP[treatmentMachineName];
+  if (explicit) return explicit;
+  const n = (treatmentMachineName || '').toLowerCase();
+  const m = (modelName || '').toLowerCase();
+  if (n.includes('ethos') || n.includes('halcyon') || m.includes('ads') || m.includes('halcyon')) {
+    return 'Halcyon';
+  }
+  return 'TrueBeam';
+}
+
+function shortestArcDeg(a, b) {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+}
+
+// Extract MLC leaf positions from a control point (handles both traditional MLCX
+// and Halcyon/Ethos EnhancedRTBeamLimitingOpeningSequence).
+// One-shot dump of CP keys/structure for debugging
+let _mlcDumpedOnce = false;
+
+function getMLCPositions(cp) {
+  // Traditional MLC (TrueBeam, Edge, etc.)
+  const bldp = cp.BeamLimitingDevicePositionSequence;
+  if (Array.isArray(bldp)) {
+    for (const item of bldp) {
+      const rt = item.RTBeamLimitingDeviceType;
+      if (rt === 'MLCX' || rt === 'MLCY') {
+        const raw = item.LeafJawPositions;
+        if (raw) return Array.from(raw).map(Number);
+      }
+    }
+  }
+
+  // Halcyon/Ethos dual-layer MLC. The EnhancedRTBeamLimitingOpeningSequence
+  // tag (300A,03A4) may not be in dcmjs's dictionary — scan ALL keys for
+  // sequences containing ParallelRTBeamDelimiterPositions-like data.
+  const keys = Object.keys(cp);
+
+  // First try the named keyword (if present)
+  const named = cp.EnhancedRTBeamLimitingOpeningSequence;
+  const namedArr = named ? (Array.isArray(named) ? named : [named]) : [];
+
+  // Then scan hex-keyed sequences for any that look like our target
+  const hexKeyedSeqs = [];
+  for (const k of keys) {
+    // Typical hex tag keys dcmjs falls back to
+    if (/^[0-9A-Fa-f]{8}$/.test(k)) {
+      const v = cp[k];
+      if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
+        hexKeyedSeqs.push({ key: k, items: v });
+      } else if (v && typeof v === 'object') {
+        hexKeyedSeqs.push({ key: k, items: [v] });
+      }
+    }
+  }
+
+  // (Debug dump removed — the raw-buffer scanner handles Halcyon plans)
+
+  // Helper: given a sequence item, try to extract leaf-position array
+  function extractPositions(item) {
+    if (!item) return [];
+    // Try all candidate keys
+    const cands = [
+      item.ParallelRTBeamDelimiterPositions,
+      ...Object.keys(item).map(k => {
+        if (/^[0-9A-Fa-f]{8}$/.test(k)) return item[k];
+        return null;
+      }).filter(Boolean),
+    ];
+    for (const c of cands) {
+      if (c == null) continue;
+      // Filter out nested objects; we want a flat numeric array
+      if (Array.isArray(c) || ArrayBuffer.isView(c)) {
+        try {
+          const arr = Array.from(c).map(Number).filter(v => !isNaN(v));
+          if (arr.length >= 20) return arr;  // must be a leaf array (many positions)
+        } catch (e) {}
+      }
+    }
+    return [];
+  }
+
+  const all = [];
+  // Process named first
+  for (const item of namedArr) {
+    const pos = extractPositions(item);
+    for (const v of pos) all.push(v);
+  }
+
+  // Process hex-keyed sequences — any item with lots of numeric positions is a candidate
+  if (all.length === 0) {
+    for (const { items } of hexKeyedSeqs) {
+      for (const item of items) {
+        const pos = extractPositions(item);
+        for (const v of pos) all.push(v);
+      }
+    }
+  }
+
+  return all.length > 0 ? all : null;
+}
+
+function estimateBeamTime(beam, beamMU, machineType, rawMlcs) {
+  const cps = beam.ControlPointSequence || [];
+  if (cps.length < 2) return { seconds: 0, breakdown: { mu: 0, gantry: 0, mlc: 0 } };
+
+  const M = MACHINE_DEFAULTS[machineType];
+
+  const cmw = cps.map(cp => Number(cp.CumulativeMetersetWeight) || 0);
+  const angles = cps.map(cp => Number(cp.GantryAngle) || 0);
+  const drates = cps.map(cp => cp.DoseRateSet != null ? Number(cp.DoseRateSet) : 0);
+  let mlcs = cps.map(cp => getMLCPositions(cp));
+  const finalCmw = Number(beam.FinalCumulativeMetersetWeight) || cmw[cmw.length - 1] || 1;
+
+  // If dcmjs didn't give us MLC positions for this beam, use the raw scan
+  // results (Halcyon dual-layer case). `rawMlcs` is an array of leaf-position
+  // arrays in file order; assign one per CP (concatenating layers if needed).
+  const mlcFoundFromCP = mlcs.filter(m => m !== null).length;
+  if (mlcFoundFromCP === 0 && Array.isArray(rawMlcs) && rawMlcs.length > 0) {
+    const nCP = cps.length;
+    // Group consecutive raw arrays by CP. Halcyon has 2 layers per CP.
+    const perCP = rawMlcs.length >= nCP * 2 ? 2 : 1;
+    mlcs = [];
+    for (let i = 0; i < nCP; i++) {
+      const combined = [];
+      for (let layer = 0; layer < perCP; layer++) {
+        const idx = i * perCP + layer;
+        if (idx < rawMlcs.length) {
+          for (const v of rawMlcs[idx]) combined.push(v);
+        }
+      }
+      mlcs.push(combined.length > 0 ? combined : null);
+    }
+  }
+
+  // Diagnostic: report MLC extraction status for this beam
+  const mlcFound = mlcs.filter(m => m !== null).length;
+  const firstMlcLen = mlcs.find(m => m !== null)?.length || 0;
+  console.log(`[Delivery] Beam ${beam.BeamName || beam.BeamNumber}: ${cps.length} CPs, MLC positions found in ${mlcFound}/${cps.length} CPs, positions per CP: ${firstMlcLen}`);
+
+  // Carry forward dose rate (only set on changes)
+  let lastDR = drates.find(d => d > 0) || 600;
+  for (let i = 0; i < drates.length; i++) {
+    if (drates[i] > 0) lastDR = drates[i];
+    else drates[i] = lastDR;
+  }
+
+  // Carry forward MLC
+  let lastMLC = mlcs.find(m => m !== null) || null;
+  for (let i = 0; i < mlcs.length; i++) {
+    if (mlcs[i] !== null) lastMLC = mlcs[i];
+    else mlcs[i] = lastMLC;
+  }
+
+  let totalT = 0;
+  const breakdown = { mu: 0, gantry: 0, mlc: 0 };
+
+  for (let i = 0; i < cps.length - 1; i++) {
+    const muSeg = ((cmw[i+1] - cmw[i]) / finalCmw) * beamMU;
+    const dr = drates[i];
+    const muT = dr > 0 ? (muSeg / dr) * 60 : 0;
+
+    const gantryT = shortestArcDeg(angles[i], angles[i+1]) / M.max_gantry_dps;
+
+    let mlcT = 0;
+    if (mlcs[i] && mlcs[i+1] && mlcs[i].length === mlcs[i+1].length) {
+      let maxTravel = 0;
+      for (let j = 0; j < mlcs[i].length; j++) {
+        const d = Math.abs(mlcs[i+1][j] - mlcs[i][j]);
+        if (d > maxTravel) maxTravel = d;
+      }
+      mlcT = maxTravel / M.max_mlc_mmps;
+    }
+
+    const segT = Math.max(muT, gantryT, mlcT);
+    totalT += segT;
+    if (segT === muT)      breakdown.mu += segT;
+    else if (segT === gantryT) breakdown.gantry += segT;
+    else                   breakdown.mlc += segT;
+  }
+
+  return { seconds: totalT, breakdown };
+}
+
+function extractPlanParameters(dataset) {
+  const fg = (dataset.FractionGroupSequence || [])[0];
+  if (!fg) return null;
+
+  // For Halcyon plans, dcmjs drops the dual-layer MLC sequences.
+  // Fall back to scanning the raw buffer for (300A,0356) tags.
+  let halcyonMlcs = [];
+  if (dataset._rawBuffer) {
+    halcyonMlcs = scanHalcyonMLCs(dataset._rawBuffer);
+    if (halcyonMlcs.length > 0) {
+      console.log(`[MLC scan] Found ${halcyonMlcs.length} raw MLC position arrays in file`);
+    }
+  }
+
+  const beamMU = {};
+  (fg.ReferencedBeamSequence || []).forEach(rb => {
+    beamMU[rb.ReferencedBeamNumber] = Number(rb.BeamMeterset) || 0;
+  });
+
+  const beams = dataset.BeamSequence || [];
+  const txBeams = beams.filter(b => (b.TreatmentDeliveryType || '').toUpperCase() !== 'SETUP');
+
+  // Detect machine type from first treatment beam
+  const firstTx = txBeams[0];
+  const machineType = firstTx
+    ? detectMachineType(firstTx.TreatmentMachineName, dataset.ManufacturerModelName)
+    : 'TrueBeam';
+  const M = MACHINE_DEFAULTS[machineType];
+
+  let totalTimeS = 0;
+  let totalMU = 0;
+  let numArcs = 0;
+  const planBreakdown = { mu: 0, gantry: 0, mlc: 0 };
+
+  // Slice the file-wide raw MLC scan per beam. Determine layers-per-CP by
+  // comparing total raw count to total CPs across treatment beams.
+  let rawPos = halcyonMlcs.map(m => m.positions);
+  const totalCPs = txBeams.reduce((s, b) => s + (b.ControlPointSequence || []).length, 0);
+  const layersPerCP = (rawPos.length > 0 && totalCPs > 0)
+    ? Math.max(1, Math.round(rawPos.length / totalCPs))
+    : 0;
+
+  let rawCursor = 0;
+  txBeams.forEach(beam => {
+    const bnum = beam.BeamNumber;
+    const mu = beamMU[bnum] || 0;
+    totalMU += mu;
+    numArcs += 1;
+
+    const nCP = (beam.ControlPointSequence || []).length;
+    const consume = nCP * layersPerCP;
+    const beamRaw = layersPerCP > 0 ? rawPos.slice(rawCursor, rawCursor + consume) : [];
+    rawCursor += consume;
+
+    const bt = estimateBeamTime(beam, mu, machineType, beamRaw);
+    totalTimeS += bt.seconds;
+    planBreakdown.mu += bt.breakdown.mu;
+    planBreakdown.gantry += bt.breakdown.gantry;
+    planBreakdown.mlc += bt.breakdown.mlc;
+  });
+
+  if (numArcs > 1) {
+    totalTimeS += (numArcs - 1) * M.overhead_s;
+  }
+
+  const totalBrk = planBreakdown.mu + planBreakdown.gantry + planBreakdown.mlc;
+  const limiting = {
+    mu_pct:     totalBrk > 0 ? (100 * planBreakdown.mu / totalBrk)     : 0,
+    gantry_pct: totalBrk > 0 ? (100 * planBreakdown.gantry / totalBrk) : 0,
+    mlc_pct:    totalBrk > 0 ? (100 * planBreakdown.mlc / totalBrk)    : 0,
+  };
+
+  // Determine primary limiting axis
+  let primaryLimit = 'mu';
+  if (limiting.gantry_pct > limiting.mu_pct && limiting.gantry_pct > limiting.mlc_pct) primaryLimit = 'gantry';
+  else if (limiting.mlc_pct > limiting.mu_pct && limiting.mlc_pct > limiting.gantry_pct) primaryLimit = 'mlc';
+
+  return {
+    machineType,
+    machineName: firstTx ? firstTx.TreatmentMachineName : null,
+    numArcs,
+    totalMU: Math.round(totalMU * 10) / 10,
+    deliveryTimeS: Math.round(totalTimeS),
+    deliveryTimeMin: Math.round(totalTimeS / 60 * 10) / 10,
+    limitingBreakdown: {
+      mu_pct:     Math.round(limiting.mu_pct * 10) / 10,
+      gantry_pct: Math.round(limiting.gantry_pct * 10) / 10,
+      mlc_pct:    Math.round(limiting.mlc_pct * 10) / 10,
+    },
+    primaryLimit,
+  };
+}
+
+
 function extractPrescription(dataset) {
   const results = {
     planLabel: dataset.RTPlanLabel || '',
@@ -1591,21 +2003,37 @@ function randomizeIdentity(folderNames) {
 // UI Event Handlers
 // =============================================================================
 
-// --- Site scanning ---
-document.getElementById('scan-sites-btn').addEventListener('click', () => {
-  // Since we can't scan the filesystem from browser, prompt user
-  App.notify('Enter site names in the dropdown or use the file picker to load a site config.', 'info');
-  // For now, add CARDIAC as known
+// --- Auto-populate sites on load ---
+async function loadSites() {
   const sel = document.getElementById('site-select');
-  if (sel.options.length <= 1) {
-    ['CARDIAC'].forEach(site => {
+  sel.innerHTML = '<option value="">— Select —</option>';
+  try {
+    const resp = await fetch(`/api/sites?_=${Date.now()}`);
+    const data = await resp.json();
+    const sites = data.sites || [];
+    sites.forEach(site => {
       const opt = document.createElement('option');
       opt.value = site;
       opt.textContent = site;
       sel.appendChild(opt);
     });
+    // Also populate the aggregation (Step 6) dropdown
+    const aggSel = document.getElementById('agg-site-select');
+    if (aggSel) {
+      aggSel.innerHTML = '<option value="">— Select —</option>';
+      sites.forEach(site => {
+        const opt = document.createElement('option');
+        opt.value = site;
+        opt.textContent = site;
+        aggSel.appendChild(opt);
+      });
+    }
+  } catch (e) {
+    sel.innerHTML = '<option value="">— Server not reachable —</option>';
+    console.warn('Failed to load sites:', e);
   }
-});
+}
+loadSites();
 
 // --- Template loading ---
 document.getElementById('template-file').addEventListener('change', async (e) => {
@@ -1628,13 +2056,11 @@ document.getElementById('template-file').addEventListener('change', async (e) =>
 // --- Save site config ---
 document.getElementById('save-site-config-btn').addEventListener('click', () => {
   const site = document.getElementById('site-select').value;
-  const reviewers = document.getElementById('reviewers-input').value
-    .split(',').map(s => s.trim()).filter(Boolean);
+  if (!site) { App.notify('Please select an anatomical site.', 'error'); return; }
 
   App.siteConfig = {
     site,
     templateName: App.templateXml ? 'loaded' : '',
-    reviewers,
   };
 
   document.getElementById('validate-btn').disabled = false;
@@ -1763,9 +2189,17 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
         } else {
           App.log(logArea, `  No prescription info found in RP`, 'log-warn');
         }
+
+        // Extract plan parameters (arcs, MU, delivery time, limiting axis)
+        d.planParams = extractPlanParameters(rpDataset);
+        if (d.planParams) {
+          const pp = d.planParams;
+          App.log(logArea, `  Plan: ${pp.numArcs} arcs, ${pp.totalMU} MU, ~${pp.deliveryTimeMin} min, limited by ${pp.primaryLimit}`, 'log-ok');
+        }
       } catch (e) {
         App.log(logArea, `  ERROR parsing RP for ${folder}: ${e.message}`, 'log-err');
         d.prescription = null;
+        d.planParams = null;
       }
     }
   }
@@ -2089,9 +2523,9 @@ function displayDicomPrescriptions() {
 
     const rx = d.prescription;
     const div = document.createElement('div');
-    div.style.cssText = 'background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:12px';
+    div.style.cssText = 'background:#f0f9f4;border:1px solid var(--green);border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--text)';
 
-    let html = `<strong style="color:#88cc88">${folder}</strong>`;
+    let html = `<strong style="color:var(--green)">${folder}</strong>`;
     if (rx.planLabel) html += ` <span style="color:var(--text-dim)">(${rx.planLabel})</span>`;
     html += '<br>';
 
@@ -2195,6 +2629,8 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     App.log(logArea, 'WARNING: No prescription dose configured. Set it above before exporting.', 'log-warn');
   }
 
+  const clinicalContext = (document.getElementById('clinical-context').value || '').trim();
+
   const manifest = {
     subject: App.subjectPath,
     site: App.siteConfig?.site || 'UNKNOWN',
@@ -2205,6 +2641,7 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     contourMappings: App.contourMappings,
     templateName: App.templateXml ? 'loaded' : '',
     prescriptionDose: App.prescriptionDose || null,
+    clinicalContext: clinicalContext || null,
   };
 
   // Build CT volume from first plan
@@ -2295,6 +2732,7 @@ document.getElementById('export-btn').addEventListener('click', async () => {
       structures: mappedStructures,
       dvh: dvhExport,
       clinicalGoals: goalExport,
+      planParams: d.planParams || null,
     };
 
     App.log(logArea, `  Structures: ${mappedStructures.length}, DVH curves: ${Object.keys(dvhExport).length}`, 'log-ok');
@@ -2376,6 +2814,12 @@ document.getElementById('export-btn').addEventListener('click', async () => {
       // Clinical goals
       await uploadJSON(`plan_${letter}/clinical_goals.json`, pe.clinicalGoals);
       App.log(logArea, `  Saved plan_${letter}/clinical_goals.json`, 'log-ok');
+
+      // Plan parameters (arcs, MU, delivery time, limiting axis)
+      if (pe.planParams) {
+        await uploadJSON(`plan_${letter}/plan_params.json`, pe.planParams);
+        App.log(logArea, `  Saved plan_${letter}/plan_params.json`, 'log-ok');
+      }
     }
 
     App.setProgress('export-progress', 100);
@@ -2394,20 +2838,7 @@ document.getElementById('export-btn').addEventListener('click', async () => {
 // Ranking Aggregation (Step 6)
 // =============================================================================
 
-// Populate site dropdown for aggregation (mirrors step 1)
-document.getElementById('scan-sites-btn').addEventListener('click', () => {
-  const aggSel = document.getElementById('agg-site-select');
-  const mainSel = document.getElementById('site-select');
-  aggSel.innerHTML = '<option value="">— Select —</option>';
-  [...mainSel.options].forEach(opt => {
-    if (opt.value) {
-      const o = document.createElement('option');
-      o.value = opt.value;
-      o.textContent = opt.textContent;
-      aggSel.appendChild(o);
-    }
-  });
-});
+// Aggregation site dropdown is auto-populated by loadSites() on page load.
 
 document.getElementById('load-rankings-btn').addEventListener('click', async () => {
   const site = document.getElementById('agg-site-select').value;
@@ -2424,11 +2855,20 @@ document.getElementById('load-rankings-btn').addEventListener('click', async () 
 
     App.aggData = []; // store for CSV export
 
+    // Load reviewers list (fall back if site config missing)
+    let reviewers;
+    try {
+      const rResp = await fetch(`/reviewers.json?_=${Date.now()}`);
+      reviewers = await rResp.json();
+    } catch (e) {
+      reviewers = App.siteConfig?.reviewers || ['Reviewer 1', 'Reviewer 2'];
+    }
+
     for (const subj of subjects) {
       // Load manifest to get identity map
       let identityMap = {};
       try {
-        const mResp = await fetch(`SITES/${site}/${subj.name}/_processed/manifest.json`);
+        const mResp = await fetch(`SITES/${site}/${subj.name}/_processed/manifest.json?_=${Date.now()}`);
         const manifest = await mResp.json();
         identityMap = manifest.identityMap || {};
       } catch (e) { /* no manifest */ }
@@ -2439,9 +2879,6 @@ document.getElementById('load-rankings-btn').addEventListener('click', async () 
         reverseMap[letter] = folder;
       });
 
-      // Find all ranking files for this subject
-      // We need to scan — ask server for rankings
-      const reviewers = App.siteConfig?.reviewers || ['Reviewer 1', 'Reviewer 2'];
       for (const reviewer of reviewers) {
         try {
           const rResp = await fetch(
@@ -2451,23 +2888,38 @@ document.getElementById('load-rankings-btn').addEventListener('click', async () 
           if (!rData.exists) continue;
 
           const r = rData.ranking;
-          const row = document.createElement('tr');
 
-          const rankA = r.rankings?.A || '—';
-          const rankB = r.rankings?.B || '—';
-          const rankC = r.rankings?.C || '—';
+          // Handle both new (phase1/phase2) and legacy (rankings) formats
+          const p1 = r.rankings_phase1 || r.rankings || {};
+          const p2 = r.rankings_phase2 || null;
+          const p1A = p1.A || '—', p1B = p1.B || '—', p1C = p1.C || '—';
+          const p2A = p2 ? (p2.A || '—') : '—';
+          const p2B = p2 ? (p2.B || '—') : '—';
+          const p2C = p2 ? (p2.C || '—') : '—';
           const actualA = reverseMap['A'] || '?';
           const actualB = reverseMap['B'] || '?';
           const actualC = reverseMap['C'] || '?';
+          const changed = r.phase2_changed === true ? 'Yes' :
+                          (p2 ? 'No' : '—');
 
+          const notesArr = [];
+          if (r.notes_phase1) notesArr.push(`P1: ${r.notes_phase1}`);
+          if (r.notes_phase2) notesArr.push(`P2: ${r.notes_phase2}`);
+          if (r.notes) notesArr.push(r.notes); // legacy
+          const notesStr = notesArr.join(' | ');
+
+          const row = document.createElement('tr');
           row.innerHTML = `
             <td><strong>${subj.name}</strong></td>
             <td>${reviewer}</td>
-            <td>${rankA} <span style="color:var(--text-dim);font-size:10px">(${actualA})</span></td>
-            <td>${rankB} <span style="color:var(--text-dim);font-size:10px">(${actualB})</span></td>
-            <td>${rankC} <span style="color:var(--text-dim);font-size:10px">(${actualC})</span></td>
-            <td>${r.tiedRankings ? 'Yes' : 'No'}</td>
-            <td>${r.notes || ''}</td>
+            <td>${p1A} <span style="color:var(--text-dim);font-size:10px">(${actualA})</span></td>
+            <td>${p1B} <span style="color:var(--text-dim);font-size:10px">(${actualB})</span></td>
+            <td>${p1C} <span style="color:var(--text-dim);font-size:10px">(${actualC})</span></td>
+            <td style="color:${p2 ? 'var(--text)' : 'var(--text-dim)'}">${p2A}</td>
+            <td style="color:${p2 ? 'var(--text)' : 'var(--text-dim)'}">${p2B}</td>
+            <td style="color:${p2 ? 'var(--text)' : 'var(--text-dim)'}">${p2C}</td>
+            <td style="color:${changed === 'Yes' ? 'var(--orange)' : 'var(--text-dim)'};font-weight:${changed === 'Yes' ? '700' : 'normal'}">${changed}</td>
+            <td style="font-size:11px">${notesStr}</td>
             <td style="font-size:10px">${new Date(r.timestamp).toLocaleString()}</td>
           `;
           tbody.appendChild(row);
@@ -2475,11 +2927,14 @@ document.getElementById('load-rankings-btn').addEventListener('click', async () 
           App.aggData.push({
             subject: subj.name,
             reviewer,
-            rankA, actualA,
-            rankB, actualB,
-            rankC, actualC,
-            tied: r.tiedRankings ? 'Yes' : 'No',
-            notes: r.notes || '',
+            p1A, p1B, p1C,
+            p2A, p2B, p2C,
+            actualA, actualB, actualC,
+            tied_p1: r.tied_phase1 || r.tiedRankings ? 'Yes' : 'No',
+            tied_p2: r.tied_phase2 ? 'Yes' : 'No',
+            changed,
+            notes_p1: r.notes_phase1 || r.notes || '',
+            notes_p2: r.notes_phase2 || '',
             timestamp: r.timestamp,
           });
         } catch (e) { /* no ranking for this reviewer */ }
@@ -2488,7 +2943,7 @@ document.getElementById('load-rankings-btn').addEventListener('click', async () 
 
     document.getElementById('export-rankings-btn').disabled = App.aggData.length === 0;
     if (App.aggData.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-dim)">No rankings found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-dim)">No rankings found.</td></tr>';
     }
     App.notify(`Loaded ${App.aggData.length} rankings.`);
 
@@ -2500,9 +2955,22 @@ document.getElementById('load-rankings-btn').addEventListener('click', async () 
 document.getElementById('export-rankings-btn').addEventListener('click', () => {
   if (!App.aggData || App.aggData.length === 0) return;
 
-  const headers = ['Subject','Reviewer','Rank_A','Actual_A','Rank_B','Actual_B','Rank_C','Actual_C','Tied','Notes','Timestamp'];
+  const headers = [
+    'Subject', 'Reviewer',
+    'P1_Rank_A','P1_Rank_B','P1_Rank_C',
+    'P2_Rank_A','P2_Rank_B','P2_Rank_C',
+    'Actual_A','Actual_B','Actual_C',
+    'Tied_P1','Tied_P2','Changed',
+    'Notes_P1','Notes_P2','Timestamp',
+  ];
+  const q = (s) => `"${String(s || '').replace(/"/g, '""')}"`;
   const rows = App.aggData.map(d => [
-    d.subject, d.reviewer, d.rankA, d.actualA, d.rankB, d.actualB, d.rankC, d.actualC, d.tied, `"${(d.notes||'').replace(/"/g,'""')}"`, d.timestamp,
+    d.subject, d.reviewer,
+    d.p1A, d.p1B, d.p1C,
+    d.p2A, d.p2B, d.p2C,
+    d.actualA, d.actualB, d.actualC,
+    d.tied_p1, d.tied_p2, d.changed,
+    q(d.notes_p1), q(d.notes_p2), d.timestamp,
   ].join(','));
 
   const csv = [headers.join(','), ...rows].join('\n');

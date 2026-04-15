@@ -34,6 +34,10 @@ RANKINGS_DIR = SITES_DIR / '_rankings'
 class ViewerHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP handler with API endpoints for the plan viewer."""
 
+    # Per-request socket timeout (seconds). Prevents hung connections from
+    # tying up threads indefinitely.
+    timeout = 120
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(VIEWER_DIR), **kwargs)
 
@@ -315,7 +319,15 @@ def main():
     print(f'╚════════════════════════════════════════════════════════╝')
     print()
 
-    server = http.server.HTTPServer(('0.0.0.0', PORT), ViewerHandler)
+    # Use ThreadingHTTPServer so one slow/hung request can't block others.
+    # Also set SO_REUSEADDR so restarts don't fail with "address in use".
+    class ReusableThreadingHTTPServer(http.server.ThreadingHTTPServer):
+        allow_reuse_address = True
+        daemon_threads = True  # don't block shutdown on long-running requests
+
+    server = ReusableThreadingHTTPServer(('0.0.0.0', PORT), ViewerHandler)
+    # Kill sockets that have been idle too long instead of letting them accumulate
+    server.timeout = 300
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -170,7 +170,7 @@ const DataLoader = {
     const structures = {};
     for (const p of PLANS) {
       try {
-        const sResp = await fetch(`${base}/plan_${p}/structures.json`);
+        const sResp = await fetch(`${base}/plan_${p}/structures.json${cb}`);
         structures[p] = await sResp.json();
       } catch (e) {
         structures[p] = [];
@@ -182,7 +182,7 @@ const DataLoader = {
     const dvhData = {};
     for (const p of PLANS) {
       try {
-        const dvhResp = await fetch(`${base}/plan_${p}/dvh.json`);
+        const dvhResp = await fetch(`${base}/plan_${p}/dvh.json${cb}`);
         dvhData[p] = await dvhResp.json();
       } catch (e) {
         dvhData[p] = {};
@@ -193,16 +193,27 @@ const DataLoader = {
     const clinicalGoals = {};
     for (const p of PLANS) {
       try {
-        const gResp = await fetch(`${base}/plan_${p}/clinical_goals.json`);
+        const gResp = await fetch(`${base}/plan_${p}/clinical_goals.json${cb}`);
         clinicalGoals[p] = await gResp.json();
       } catch (e) {
         clinicalGoals[p] = [];
       }
     }
 
+    // 7. Load plan parameters (arcs, MU, delivery time, limiting axis)
+    const planParams = {};
+    for (const p of PLANS) {
+      try {
+        const ppResp = await fetch(`${base}/plan_${p}/plan_params.json${cb}`);
+        planParams[p] = ppResp.ok ? await ppResp.json() : null;
+      } catch (e) {
+        planParams[p] = null;
+      }
+    }
+
     onProgress('Done!', 100);
 
-    return { manifest, ctMeta, ctVolume, doseVols, doseMeta, structures, dvhData, clinicalGoals };
+    return { manifest, ctMeta, ctVolume, doseVols, doseMeta, structures, dvhData, clinicalGoals, planParams };
   },
 
   async checkExistingRanking(site, subject, reviewer) {
@@ -229,7 +240,7 @@ const DataLoader = {
 // Apply Loaded Data to State
 // ─────────────────────────────────────────────────────────────────────────────
 function applyLoadedData(data) {
-  const { ctMeta, ctVolume, doseVols, doseMeta, structures, dvhData, clinicalGoals, manifest } = data;
+  const { ctMeta, ctVolume, doseVols, doseMeta, structures, dvhData, clinicalGoals, manifest, planParams } = data;
 
   S.nx = ctMeta.cols;
   S.ny = ctMeta.rows;
@@ -243,6 +254,7 @@ function applyLoadedData(data) {
   S.doseMeta = doseMeta;
   S.manifest = manifest;
   S.dvhData = dvhData;
+  S.planParams = planParams || { A: null, B: null, C: null };
   S.clinicalGoals = clinicalGoals;
 
   // Compute max dose across all plans for colormap
@@ -1273,6 +1285,29 @@ function renderStructureUI() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Clinical Goals Panel
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Clinical Context Panel
+// ─────────────────────────────────────────────────────────────────────────────
+function renderClinicalContext() {
+  const content = document.getElementById('context-content');
+  const text = S.manifest?.clinicalContext;
+  if (text && text.trim()) {
+    content.textContent = text;
+  } else {
+    content.innerHTML = '<p style="color:var(--text-dim)">No clinical context provided for this subject.</p>';
+  }
+}
+
+// Shown after reviewer selects their name but before a subject is loaded
+function showEmptyWorkspace() {
+  // Don't show the main body until a subject is actually loaded —
+  // keep the welcome screen hidden and let the top-bar prompts guide the user.
+  // The case-label will show "No subject loaded" until they load one.
+  const caseLabel = document.getElementById('case-label');
+  if (caseLabel && !S.currentSubject) caseLabel.textContent = 'No subject loaded — select site and subject above';
+}
+
+
 function renderClinicalGoals() {
   const content = document.getElementById('goals-content');
 
@@ -1400,23 +1435,31 @@ function initRanking() {
     }
 
     const notes = document.getElementById('rank-notes').value.trim();
+    const phase1Rankings = Object.fromEntries(PLANS.map((p, i) => [p, sels[i].value]));
+    const tied1 = new Set(sels.map(s => s.value)).size < 3;
+
     const result = {
       site: S.currentSite,
       subject: S.currentSubject,
       reviewer,
-      rankings: Object.fromEntries(PLANS.map((p, i) => [p, sels[i].value])),
-      tiedRankings: new Set(sels.map(s => s.value)).size < 3,
-      notes: notes || null,
+      rankings_phase1: phase1Rankings,
+      tied_phase1: tied1,
+      notes_phase1: notes || null,
+      // Phase 2 fields added after the reveal dialog
+      rankings_phase2: null,
+      tied_phase2: null,
+      notes_phase2: null,
+      phase2_changed: false,
       timestamp: new Date().toISOString(),
     };
 
+    // Save Phase 1 ranking immediately
     try {
       await DataLoader.saveRanking(result);
-      stat.textContent = 'Submitted!';
+      stat.textContent = 'Phase 1 submitted — see plan details...';
       stat.style.color = 'var(--green)';
       btn.disabled = true;
     } catch (e) {
-      // Fallback: download as JSON
       const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
       const a = Object.assign(document.createElement('a'), {
         href: URL.createObjectURL(blob),
@@ -1424,10 +1467,163 @@ function initRanking() {
       });
       a.click();
       URL.revokeObjectURL(a.href);
-      stat.textContent = 'Saved (downloaded).';
-      stat.style.color = 'var(--yellow)';
     }
+
+    // Phase 2: reveal plan parameters and allow re-ranking
+    openRerankDialog(result, phase1Rankings, stat);
   });
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Post-Submit Re-Rank Dialog (Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+function openRerankDialog(resultBase, phase1Rankings, statEl) {
+  const modal = document.getElementById('rerank-modal');
+  const content = document.getElementById('rerank-content');
+
+  // Build the plan parameters table
+  const pp = S.planParams || {};
+  const fmtTime = (s) => {
+    if (s == null) return '—';
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')} (${(s/60).toFixed(1)} min)`;
+  };
+  const fmtLimit = (p) => {
+    if (!p || !p.limitingBreakdown) return '—';
+    const lb = p.limitingBreakdown;
+    const parts = [];
+    if (lb.mu_pct > 1)     parts.push(`MU ${lb.mu_pct.toFixed(0)}%`);
+    if (lb.gantry_pct > 1) parts.push(`Gantry ${lb.gantry_pct.toFixed(0)}%`);
+    if (lb.mlc_pct > 1)    parts.push(`MLC ${lb.mlc_pct.toFixed(0)}%`);
+    return parts.join(' / ');
+  };
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">';
+  html += '<thead><tr style="background:#2a2a2a">';
+  html += '<th style="padding:8px;text-align:left">Parameter</th>';
+  html += '<th style="padding:8px;color:var(--row-A)">Plan A</th>';
+  html += '<th style="padding:8px;color:var(--row-B)">Plan B</th>';
+  html += '<th style="padding:8px;color:var(--row-C)">Plan C</th>';
+  html += '</tr></thead><tbody>';
+
+  const rows = [
+    ['Your initial ranking',     p => phase1Rankings[p] ? `${phase1Rankings[p]}${ordinal(phase1Rankings[p])}` : '—'],
+    ['Number of arcs',           p => pp[p] ? pp[p].numArcs : '—'],
+    ['Total MU',                 p => pp[p] ? Math.round(pp[p].totalMU).toLocaleString() : '—'],
+    ['Est. delivery time',       p => pp[p] ? fmtTime(pp[p].deliveryTimeS) : '—'],
+    ['Speed-limiting factor',    p => pp[p] ? fmtLimit(pp[p]) : '—'],
+  ];
+
+  rows.forEach(([label, fn]) => {
+    html += `<tr style="border-bottom:1px solid #2a2a2a"><td style="padding:6px 8px;color:var(--text-dim)">${label}</td>`;
+    PLANS.forEach(p => {
+      html += `<td style="padding:6px 8px;text-align:center">${fn(p)}</td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+
+  // Re-ranking dropdowns (pre-populated with phase 1 values)
+  html += '<div style="background:#1a1a2e;border:1px solid #2a3a5e;border-radius:6px;padding:12px;margin-bottom:8px">';
+  html += '<div style="font-weight:600;margin-bottom:10px;font-size:13px">Revised Ranking</div>';
+  html += '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">';
+
+  PLANS.forEach(p => {
+    const val = phase1Rankings[p] || '';
+    html += `<div style="display:flex;align-items:center;gap:6px">`;
+    html += `<span style="color:var(--row-${p});font-weight:700">Plan ${p}</span>`;
+    html += `<select class="rank-sel rerank-sel" id="rerank-${p}" data-plan="${p}">`;
+    html += `<option value="">—</option>`;
+    html += `<option value="1"${val==='1'?' selected':''}>1st</option>`;
+    html += `<option value="2"${val==='2'?' selected':''}>2nd</option>`;
+    html += `<option value="3"${val==='3'?' selected':''}>3rd</option>`;
+    html += `</select></div>`;
+  });
+
+  html += '</div>';
+  html += '<div style="margin-top:10px">';
+  html += '<input type="text" id="rerank-notes" placeholder="Optional notes for revised ranking..." style="width:100%;padding:6px 10px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">';
+  html += '</div>';
+  html += '<div id="rerank-status" style="margin-top:6px;font-size:11px;color:var(--text-dim);min-height:16px"></div>';
+  html += '</div>';
+
+  content.innerHTML = html;
+  modal.classList.remove('hidden');
+
+  const rerankSels = PLANS.map(p => document.getElementById(`rerank-${p}`));
+  const rerankStatus = document.getElementById('rerank-status');
+  const submitBtn = document.getElementById('rerank-submit');
+  const skipBtn = document.getElementById('rerank-skip');
+
+  function validateRerank() {
+    const vals = rerankSels.map(s => s.value).filter(Boolean);
+    const hasFirst = vals.includes('1');
+    const allFilled = vals.length === 3;
+
+    if (!allFilled) {
+      rerankStatus.textContent = 'All 3 plans must be ranked.';
+      rerankStatus.style.color = 'var(--yellow)';
+      submitBtn.disabled = true;
+    } else if (!hasFirst) {
+      rerankStatus.textContent = 'At least one plan must be ranked 1st.';
+      rerankStatus.style.color = 'var(--red)';
+      submitBtn.disabled = true;
+    } else {
+      rerankStatus.textContent = 'Ready.';
+      rerankStatus.style.color = 'var(--green)';
+      submitBtn.disabled = false;
+    }
+  }
+  rerankSels.forEach(s => s.addEventListener('change', validateRerank));
+  validateRerank();
+
+  // Skip: keep only phase 1, close dialog
+  skipBtn.onclick = () => {
+    modal.classList.add('hidden');
+    statEl.textContent = 'Ranking submitted (no revision).';
+    statEl.style.color = 'var(--green)';
+  };
+
+  // Submit phase 2
+  submitBtn.onclick = async () => {
+    const phase2Rankings = Object.fromEntries(
+      PLANS.map((p, i) => [p, rerankSels[i].value])
+    );
+    const tied2 = new Set(rerankSels.map(s => s.value)).size < 3;
+    const notes2 = document.getElementById('rerank-notes').value.trim();
+
+    // Determine if rankings changed between phases
+    const changed = PLANS.some(p => phase1Rankings[p] !== phase2Rankings[p]);
+
+    const finalResult = {
+      ...resultBase,
+      rankings_phase2: phase2Rankings,
+      tied_phase2: tied2,
+      notes_phase2: notes2 || null,
+      phase2_changed: changed,
+      timestamp_phase2: new Date().toISOString(),
+    };
+
+    try {
+      await DataLoader.saveRanking(finalResult);
+      statEl.textContent = changed ? 'Revised ranking submitted.' : 'Ranking confirmed (no change).';
+      statEl.style.color = 'var(--green)';
+    } catch (e) {
+      statEl.textContent = 'Save failed — see console.';
+      statEl.style.color = 'var(--red)';
+      console.error(e);
+    }
+
+    modal.classList.add('hidden');
+  };
+}
+
+function ordinal(n) {
+  const s = String(n);
+  return s === '1' ? 'st' : s === '2' ? 'nd' : s === '3' ? 'rd' : 'th';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1618,6 +1814,17 @@ function initControls() {
   document.getElementById('goals-close-btn').addEventListener('click', () => {
     document.getElementById('goals-panel').classList.remove('open');
   });
+
+  // Clinical context panel
+  const ctxPanel = document.getElementById('context-panel');
+  function toggleContext() {
+    if (ctxPanel.style.right === '0px') ctxPanel.style.right = '-420px';
+    else ctxPanel.style.right = '0px';
+  }
+  document.getElementById('context-btn').addEventListener('click', toggleContext);
+  document.getElementById('context-close-btn').addEventListener('click', () => {
+    ctxPanel.style.right = '-420px';
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1651,7 +1858,7 @@ async function initNavigation() {
   const subjSel = document.getElementById('subject-select');
   const loadBtn = document.getElementById('load-btn');
 
-  // Load reviewers from reviewers.json
+  // Load reviewers from reviewers.json and populate BOTH the gate and the hidden top-bar select
   try {
     const revResp = await fetch(`/reviewers.json?_=${Date.now()}`);
     if (revResp.ok) {
@@ -1662,14 +1869,58 @@ async function initNavigation() {
         return lastA.localeCompare(lastB);
       });
       const revSel = document.getElementById('reviewer-select');
+      const revGate = document.getElementById('reviewer-gate');
       reviewers.forEach(name => {
         const opt = document.createElement('option');
         opt.value = name;
         opt.textContent = name;
         revSel.appendChild(opt);
+
+        const optG = document.createElement('option');
+        optG.value = name;
+        optG.textContent = name;
+        revGate.appendChild(optG);
       });
     }
   } catch (e) { console.warn('Could not load reviewers.json:', e); }
+
+  // Reviewer gate — user must select name before accessing the viewer
+  const revGate = document.getElementById('reviewer-gate');
+  const continueBtn = document.getElementById('reviewer-continue-btn');
+  const switchBtn = document.getElementById('reviewer-switch-btn');
+  const reviewerLocked = document.getElementById('reviewer-locked');
+
+  function setReviewer(name) {
+    document.getElementById('reviewer-select').value = name;
+    reviewerLocked.textContent = name || '—';
+    // Trigger change event so ranking validation re-runs
+    document.getElementById('reviewer-select').dispatchEvent(new Event('change'));
+  }
+
+  revGate.addEventListener('change', () => {
+    continueBtn.disabled = !revGate.value;
+  });
+
+  continueBtn.addEventListener('click', () => {
+    const name = revGate.value;
+    if (!name) return;
+    setReviewer(name);
+    document.getElementById('welcome-screen').classList.add('hidden');
+    // Show a placeholder body area until a subject is loaded
+    showEmptyWorkspace();
+  });
+
+  switchBtn.addEventListener('click', () => {
+    // Return to the gate
+    document.getElementById('welcome-screen').classList.remove('hidden');
+    document.getElementById('body').style.display = 'none';
+    revGate.value = '';
+    continueBtn.disabled = true;
+    setReviewer('');
+    // Reset current subject state so nothing is "in progress"
+    S.currentSite = '';
+    S.currentSubject = '';
+  });
 
   // Load sites
   const sites = await DataLoader.loadSites();
@@ -1745,11 +1996,15 @@ async function initNavigation() {
       renderIsodoseUI();
       renderStructureUI();
       renderClinicalGoals();
+      renderClinicalContext();
 
-      // Reset ranking
+      // Reset ranking UI
       PLANS.forEach(p => { document.getElementById(`rank-${p}`).value = ''; });
       document.getElementById('submit-btn').disabled = true;
       document.getElementById('rank-status').textContent = '';
+      document.getElementById('rank-notes').value = '';
+      document.getElementById('tie-confirm').checked = false;
+      document.getElementById('tie-confirm-wrap').style.display = 'none';
 
       // Render after layout settles
       setTimeout(() => Renderer.renderAll(), 100);
