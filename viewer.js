@@ -281,9 +281,7 @@ function applyLoadedData(data) {
   }
 
   // Resample dose grids onto CT grid for fast rendering
-  console.time('Dose resampling');
   resampleDoseToCtGrid();
-  console.timeEnd('Dose resampling');
 
   // Process structures — convert DICOM coordinates to voxel indices
   S.structures = {};

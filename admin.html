@@ -1202,10 +1202,6 @@ function scanHalcyonMLCs(buffer) {
     i = dataStart + vlen - 1;
   }
 
-  console.log(`[MLC scan] Tag (300A,064A) ParallelRTBeamDelimiterPositions occurrences: ${tagsMatched}, usable arrays: ${results.length}`);
-  if (tagsMatched > 0 && results.length === 0) {
-    console.log('[MLC scan] Bytes-after-tag samples (hex):', diagSamples);
-  }
   return results;
 }
 
@@ -1294,9 +1290,6 @@ function shortestArcDeg(a, b) {
 
 // Extract MLC leaf positions from a control point (handles both traditional MLCX
 // and Halcyon/Ethos EnhancedRTBeamLimitingOpeningSequence).
-// One-shot dump of CP keys/structure for debugging
-let _mlcDumpedOnce = false;
-
 function getMLCPositions(cp) {
   // Traditional MLC (TrueBeam, Edge, etc.)
   const bldp = cp.BeamLimitingDevicePositionSequence;
@@ -1412,11 +1405,6 @@ function estimateBeamTime(beam, beamMU, machineType, rawMlcs) {
     }
   }
 
-  // Diagnostic: report MLC extraction status for this beam
-  const mlcFound = mlcs.filter(m => m !== null).length;
-  const firstMlcLen = mlcs.find(m => m !== null)?.length || 0;
-  console.log(`[Delivery] Beam ${beam.BeamName || beam.BeamNumber}: ${cps.length} CPs, MLC positions found in ${mlcFound}/${cps.length} CPs, positions per CP: ${firstMlcLen}`);
-
   // Carry forward dose rate (only set on changes)
   let lastDR = drates.find(d => d > 0) || 600;
   for (let i = 0; i < drates.length; i++) {
@@ -1470,9 +1458,6 @@ function extractPlanParameters(dataset) {
   let halcyonMlcs = [];
   if (dataset._rawBuffer) {
     halcyonMlcs = scanHalcyonMLCs(dataset._rawBuffer);
-    if (halcyonMlcs.length > 0) {
-      console.log(`[MLC scan] Found ${halcyonMlcs.length} raw MLC position arrays in file`);
-    }
   }
 
   const beamMU = {};
