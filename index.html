@@ -326,6 +326,12 @@
        Plan Focus control. */
     .max-btn { display: none; }
 
+    /* Variable plan count — applied by viewer.js applyPlanCount() to hide
+       elements bound to plan letters that are not active for the current
+       subject (e.g. Plan C row when a 2-plan subject is loaded). The
+       underlying DOM is preserved so event handlers and IDs stay valid. */
+    .plan-inactive { display: none !important; }
+
     /* Plan Focus segmented control (top bar) */
     .plan-focus {
       display: flex;
@@ -1202,7 +1208,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr>
+                <tr data-plan="A">
                   <td><span class="rank-lbl rank-lbl-A">Plan A</span></td>
                   <td>
                     <select class="rank-sel" id="rank-A">
@@ -1223,7 +1229,7 @@
                     </select>
                   </td>
                 </tr>
-                <tr>
+                <tr data-plan="B">
                   <td><span class="rank-lbl rank-lbl-B">Plan B</span></td>
                   <td>
                     <select class="rank-sel" id="rank-B">
@@ -1244,7 +1250,7 @@
                     </select>
                   </td>
                 </tr>
-                <tr>
+                <tr data-plan="C">
                   <td><span class="rank-lbl rank-lbl-C">Plan C</span></td>
                   <td>
                     <select class="rank-sel" id="rank-C">
@@ -1293,6 +1299,6 @@
 
 </div>
 
-<script src="viewer.js?v=20260427a"></script>
+<script src="viewer.js?v=20260427b"></script>
 </body>
 </html>

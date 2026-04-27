@@ -3,7 +3,62 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
-const PLANS = ['A', 'B', 'C'];
+// Active plan letters for the currently loaded subject. Mutable: set from
+// manifest.plans on subject load (or inferred from identityMap for legacy
+// 3-plan subjects that pre-date the variable-plan-count manifest field).
+// At module init time we default to ['A','B','C'] so DOM event wiring
+// during boot attaches handlers for all three structural plan slots.
+let PLANS = ['A', 'B', 'C'];
+
+// Structural maximum — used by code paths that need to reach all three
+// possible plan slots regardless of the current subject (e.g. CSS class
+// resets, hide/show toggles).
+const ALL_PLAN_LETTERS = ['A', 'B', 'C'];
+
+// Show/hide UI elements based on which plans are active for the current
+// subject. Iterates the structural max so a 3-plan → 2-plan transition
+// (e.g. switching subjects) re-hides plan C consistently.
+function applyPlanCount() {
+  const active = new Set(PLANS);
+  ALL_PLAN_LETTERS.forEach(p => {
+    const inUse = active.has(p);
+
+    // Plan row in the 3×3 / 1×3 grid
+    const row = document.getElementById(`row-${p}`);
+    if (row) row.classList.toggle('plan-inactive', !inUse);
+
+    // Plan Focus segmented control button
+    document.querySelectorAll(`#plan-focus button[data-plan="${p}"]`).forEach(btn => {
+      btn.classList.toggle('plan-inactive', !inUse);
+    });
+
+    // Ranking workspace row (rank + Likert dropdowns) — identified by
+    // data-plan attribute on the <tr>
+    document.querySelectorAll(`#rank-form-pane tr[data-plan="${p}"]`).forEach(tr => {
+      tr.classList.toggle('plan-inactive', !inUse);
+    });
+
+    // Hide the rank-dropdown's "3rd" option when only 2 plans are active.
+    // Doing it on the option element itself keeps the saved value robust
+    // (option still exists, just hidden) — but for safety we also reset
+    // the value to '' if it was previously '3' on a 2-plan subject.
+    const rankSel = document.getElementById(`rank-${p}`);
+    if (rankSel) {
+      const opt3 = rankSel.querySelector('option[value="3"]');
+      if (opt3) opt3.style.display = active.size >= 3 ? '' : 'none';
+    }
+  });
+
+  // For 2-plan subjects, hide the "3rd" option in every rank dropdown
+  // (even on inactive plan rows — defensive) and reset stale '3' values.
+  ALL_PLAN_LETTERS.forEach(p => {
+    const sel = document.getElementById(`rank-${p}`);
+    if (!sel) return;
+    const opt3 = sel.querySelector('option[value="3"]');
+    if (opt3) opt3.style.display = PLANS.length >= 3 ? '' : 'none';
+    if (PLANS.length < 3 && sel.value === '3') sel.value = '';
+  });
+}
 const ORIENTS = ['axial', 'coronal', 'sagittal'];
 const PLAN_COLORS = { A: '#4a9eff', B: '#ff9944', C: '#88ee66' };
 
@@ -134,6 +189,18 @@ const DataLoader = {
     const manifestResp = await fetch(`${base}/manifest.json${cb}`);
     if (!manifestResp.ok) throw new Error('No manifest.json found. Run the admin tool first.');
     const manifest = await manifestResp.json();
+
+    // 1b. Derive active plan list from manifest *now* so subsequent per-plan
+    //     loaders only fetch what exists (avoids spurious 404s on plan_C
+    //     for a 2-plan subject). Setting PLANS here means the rest of this
+    //     function — and any concurrent rendering — sees the new active set.
+    if (Array.isArray(manifest.plans) && manifest.plans.length > 0) {
+      PLANS = manifest.plans.slice().sort();
+    } else if (manifest.identityMap) {
+      PLANS = Object.values(manifest.identityMap).sort();
+    } else {
+      PLANS = ['A', 'B', 'C']; // last-resort fallback
+    }
 
     // 2. Load CT volume
     onProgress('Loading CT volume...', 15);
@@ -270,6 +337,11 @@ function applyLoadedData(data) {
   S.planParams = planParams || { A: null, B: null, C: null };
   S.clinicalGoals = clinicalGoals;
 
+  // PLANS was set inside loadSubjectData (step 1b) so that per-plan
+  // loaders only fetched the active plans. Push the resulting visibility
+  // changes through the DOM here, after all data is in place.
+  applyPlanCount();
+
   // Compute max dose across all plans for colormap
   let maxDose = 1;
   PLANS.forEach(p => {
@@ -357,7 +429,10 @@ function applyLoadedData(data) {
   // Reset Plan Focus to "All" for the newly loaded subject — covers both
   // the row layout (hidden max-btn state) and the top-bar segmented control.
   S.maximized = null;
-  PLANS.forEach(p => {
+  // Iterate the structural max so a 3-plan→2-plan transition cleans up
+  // plan C's row state too (otherwise stale .maximized/.minimized could
+  // persist underneath the new .plan-inactive hide).
+  ALL_PLAN_LETTERS.forEach(p => {
     const row = document.getElementById(`row-${p}`);
     if (row) row.classList.remove('maximized', 'minimized');
   });
@@ -1702,9 +1777,13 @@ const RankWorkspace = {
   reset() {
     this.close();
     this._phase1Data = null;
-    PLANS.forEach(p => {
-      document.getElementById(`rank-${p}`).value = '';
-      document.getElementById(`likert-${p}`).value = '';
+    // Clear all 3 structural dropdowns (not just active) so a stale value
+    // from a previous 3-plan subject doesn't bleed into a 2-plan one.
+    ALL_PLAN_LETTERS.forEach(p => {
+      const r = document.getElementById(`rank-${p}`);
+      const l = document.getElementById(`likert-${p}`);
+      if (r) r.value = '';
+      if (l) l.value = '';
     });
     document.getElementById('rank-notes').value = '';
     document.getElementById('tie-confirm').checked = false;
@@ -1819,11 +1898,12 @@ const RankWorkspace = {
       return parts.join(' / ');
     };
 
+    // Header columns adapt to the active plan count (2 or 3 plans)
     let html = '<table><thead><tr>';
     html += '<th>Parameter</th>';
-    html += '<th style="color:var(--row-A);text-align:center">Plan A</th>';
-    html += '<th style="color:var(--row-B);text-align:center">Plan B</th>';
-    html += '<th style="color:var(--row-C);text-align:center">Plan C</th>';
+    PLANS.forEach(p => {
+      html += `<th style="color:var(--row-${p});text-align:center">Plan ${p}</th>`;
+    });
     html += '</tr></thead><tbody>';
 
     const rows = [
@@ -1843,8 +1923,14 @@ const RankWorkspace = {
 };
 
 function initRanking() {
-  const rankSels   = PLANS.map(p => document.getElementById(`rank-${p}`));
-  const likertSels = PLANS.map(p => document.getElementById(`likert-${p}`));
+  // Wire all 3 structural dropdowns regardless of plan count — the
+  // visibility-toggle handles which ones the user can interact with.
+  // For validation/save we re-derive against the active PLANS each call.
+  const allRankSels   = ALL_PLAN_LETTERS.map(p => document.getElementById(`rank-${p}`));
+  const allLikertSels = ALL_PLAN_LETTERS.map(p => document.getElementById(`likert-${p}`));
+  const activeRankSels   = () => PLANS.map(p => document.getElementById(`rank-${p}`));
+  const activeLikertSels = () => PLANS.map(p => document.getElementById(`likert-${p}`));
+
   const btn        = document.getElementById('submit-btn');
   const skipBtn    = document.getElementById('rank-skip-btn');
   const stat       = document.getElementById('rank-status');
@@ -1859,26 +1945,33 @@ function initRanking() {
 
   function validateRanking() {
     const reviewer = document.getElementById('reviewer-select').value;
+    const rankSels = activeRankSels();
+    const likertSels = activeLikertSels();
+    const N = PLANS.length;
     const rankVals   = rankSels.map(s => s.value).filter(v => v);
     const likertVals = likertSels.map(s => s.value).filter(v => v);
-    const allRanked  = rankVals.length === 3;
-    const allRated   = likertVals.length === 3;
+    const allRanked  = rankVals.length === N;
+    const allRated   = likertVals.length === N;
     const hasFirst   = rankVals.includes('1');
-    const hasTies    = allRanked && new Set(rankVals).size < 3;
+    const hasTies    = allRanked && new Set(rankVals).size < N;
     const tieConfirmed = tieCheck.checked;
 
     tieWrap.style.display = hasTies ? '' : 'none';
     if (!hasTies) tieCheck.checked = false;
+
+    // Rank wording adjusts: "1st/2nd" for 2 plans, "1st/2nd/3rd" for 3.
+    const rankRange = N === 2 ? '1st/2nd' : '1st/2nd/3rd';
+    const planWord  = N === 2 ? 'both' : 'all three';
 
     let ready = false;
     if (!reviewer) {
       stat.textContent = 'Select a reviewer first.';
       stat.style.color = 'var(--yellow)';
     } else if (!allRanked) {
-      stat.textContent = 'Provide a rank (1st/2nd/3rd) for all three plans.';
+      stat.textContent = `Provide a rank (${rankRange}) for ${planWord} plans.`;
       stat.style.color = 'var(--text-dim)';
     } else if (!allRated) {
-      stat.textContent = 'Provide a plan-quality score for all three plans.';
+      stat.textContent = `Provide a plan-quality score for ${planWord} plans.`;
       stat.style.color = 'var(--text-dim)';
     } else if (!hasFirst) {
       stat.textContent = 'At least one plan must be ranked 1st.';
@@ -1894,8 +1987,11 @@ function initRanking() {
     btn.disabled = !ready;
   }
 
-  rankSels.forEach(s => s.addEventListener('change', validateRanking));
-  likertSels.forEach(s => s.addEventListener('change', validateRanking));
+  // Event listeners on ALL structural dropdowns (3 sets) — even though
+  // inactive ones are hidden, re-running validation on stale changes is
+  // harmless and keeps the wiring simple.
+  allRankSels.forEach(s => s.addEventListener('change', validateRanking));
+  allLikertSels.forEach(s => s.addEventListener('change', validateRanking));
   tieCheck.addEventListener('change', validateRanking);
   document.getElementById('reviewer-select').addEventListener('change', validateRanking);
 
@@ -1951,14 +2047,18 @@ function initRanking() {
     }
 
     const notes  = document.getElementById('rank-notes').value.trim();
+    const rankSels   = activeRankSels();
+    const likertSels = activeLikertSels();
     const phase1Rankings = Object.fromEntries(PLANS.map((p, i) => [p, rankSels[i].value]));
     const phase1Likert   = Object.fromEntries(PLANS.map((p, i) => [p, likertSels[i].value]));
-    const tied1 = new Set(rankSels.map(s => s.value)).size < 3;
+    const tied1 = new Set(rankSels.map(s => s.value)).size < PLANS.length;
 
     const result = {
       site: S.currentSite,
       subject: S.currentSubject,
       reviewer,
+      numPlans: PLANS.length,                // record plan count with the ranking
+      plans: PLANS.slice(),                  // record letter list for downstream analysis
       rankings_phase1: phase1Rankings,
       likert_phase1:   phase1Likert,
       tied_phase1: tied1,
@@ -1999,9 +2099,11 @@ function initRanking() {
     const data = RankWorkspace._phase1Data;
     if (!data) return;
 
+    const rankSels   = activeRankSels();
+    const likertSels = activeLikertSels();
     const phase2Rankings = Object.fromEntries(PLANS.map((p, i) => [p, rankSels[i].value]));
     const phase2Likert   = Object.fromEntries(PLANS.map((p, i) => [p, likertSels[i].value]));
-    const tied2 = new Set(rankSels.map(s => s.value)).size < 3;
+    const tied2 = new Set(rankSels.map(s => s.value)).size < PLANS.length;
     const notes2 = document.getElementById('rank-notes').value.trim();
 
     const changed =
