@@ -1606,9 +1606,10 @@ function openRerankDialog(resultBase, phase1Rankings, statEl) {
   html += '<th style="padding:8px;color:var(--row-C)">Plan C</th>';
   html += '</tr></thead><tbody>';
 
+  // Number of arcs intentionally omitted — institutional planning style can
+  // leak through arc count and bias the post-reveal re-ranking.
   const rows = [
     ['Your initial ranking',     p => phase1Rankings[p] ? `${phase1Rankings[p]}${ordinal(phase1Rankings[p])}` : '—'],
-    ['Number of arcs',           p => pp[p] ? pp[p].numArcs : '—'],
     ['Total MU',                 p => pp[p] ? Math.round(pp[p].totalMU).toLocaleString() : '—'],
     ['Est. delivery time',       p => pp[p] ? fmtTime(pp[p].deliveryTimeS) : '—'],
     ['Speed-limiting factor',    p => pp[p] ? fmtLimit(pp[p]) : '—'],
