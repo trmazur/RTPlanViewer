@@ -1315,14 +1315,21 @@ function renderStructureUI() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Clinical Context Panel
 // ─────────────────────────────────────────────────────────────────────────────
+// Returns the raw clinical-context text for the current subject (may be empty).
+function contextText() {
+  return S.manifest?.clinicalContext || '';
+}
+
 function renderClinicalContext() {
   const content = document.getElementById('context-content');
-  const text = S.manifest?.clinicalContext;
-  if (text && text.trim()) {
+  const text = contextText();
+  if (text.trim()) {
     content.textContent = text;
   } else {
     content.innerHTML = '<p style="color:var(--text-dim)">No clinical context provided for this subject.</p>';
   }
+  // Keep popup window in sync if currently open
+  if (typeof PopOut !== 'undefined') PopOut.refresh('context');
 }
 
 // Shown after reviewer selects their name but before a subject is loaded
@@ -1335,14 +1342,12 @@ function showEmptyWorkspace() {
 }
 
 
-function renderClinicalGoals() {
-  const content = document.getElementById('goals-content');
-
-  // Check if we have any goals
+// Build the goals-table HTML (or an empty-state message). Used both by the
+// in-app panel and the pop-out window so the two stay structurally identical.
+function goalsHtml() {
   const hasGoals = PLANS.some(p => S.clinicalGoals[p] && S.clinicalGoals[p].length > 0);
   if (!hasGoals) {
-    content.innerHTML = '<p style="color:var(--text-dim);font-size:12px">No clinical goal data available for this subject.</p>';
-    return;
+    return '<p style="color:var(--text-dim);font-size:12px">No clinical goal data available for this subject.</p>';
   }
 
   let html = `<table class="goals-tbl">
@@ -1355,7 +1360,6 @@ function renderClinicalGoals() {
       <th style="color:var(--row-C)">Plan C</th>
     </tr></thead><tbody>`;
 
-  // Group by priority
   const allGoals = S.clinicalGoals.A || [];
   const priorities = [...new Set(allGoals.map(g => g.priority))].sort((a, b) => a - b);
 
@@ -1388,8 +1392,195 @@ function renderClinicalGoals() {
   });
 
   html += '</tbody></table>';
-  content.innerHTML = html;
+  return html;
 }
+
+function renderClinicalGoals() {
+  document.getElementById('goals-content').innerHTML = goalsHtml();
+  // Keep popup window in sync if currently open
+  if (typeof PopOut !== 'undefined') PopOut.refresh('goals');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pop-out windows for Clinical Goals + Clinical Context
+// ─────────────────────────────────────────────────────────────────────────────
+// Opens a separate browser window (about:blank, same-origin) the user can
+// drag to a second monitor. The opener writes HTML directly into the popup's
+// document and re-pushes content whenever the underlying data changes.
+// Polling-based close detection (beforeunload is not reliable from opener).
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+const PopOut = {
+  windows: { goals: null, context: null },
+  pollers: { goals: null, context: null },
+
+  // Stylesheet injected into each popup. Mirrors the CSS classes used by
+  // the goals table + context text in the main viewer so the popup looks
+  // visually consistent with the in-app panel.
+  POPUP_CSS: `
+    :root {
+      --bg: #111; --panel: #1e1e1e; --panel2: #242424; --border: #333;
+      --accent: #4a9eff; --text: #e0e0e0; --text-dim: #777;
+      --green: #44cc77; --red: #ff5544; --yellow: #ffcc44;
+      --row-A: #4a9eff; --row-B: #ff9944; --row-C: #88ee66;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px;
+      padding: 18px 22px; line-height: 1.5; }
+    h2 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+    .subhdr { color: var(--text-dim); font-size: 12px; margin-bottom: 18px;
+      padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    .goals-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .goals-tbl th { background: #2a2a2a; padding: 8px; text-align: left;
+      font-weight: 600; position: sticky; top: 0; z-index: 2; }
+    .goals-tbl td { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; }
+    .goals-tbl .priority-hdr { background: #1a2a3a; font-weight: 700;
+      font-size: 13px; color: var(--accent); }
+    .g-pass { color: var(--green); font-weight: 600; }
+    .g-marginal { color: var(--yellow); font-weight: 600; }
+    .g-fail { color: var(--red); font-weight: 600; }
+    .ctx-text { white-space: pre-wrap; line-height: 1.65; font-size: 14px; }
+    .empty { color: var(--text-dim); font-style: italic; }
+    .stale-banner { background: #3a2a1a; border: 1px solid var(--yellow);
+      color: var(--yellow); padding: 8px 12px; border-radius: 4px;
+      font-size: 12px; margin-bottom: 14px; }
+  `,
+
+  open(kind) {
+    // If already open, just focus it
+    const existing = this.windows[kind];
+    if (existing && !existing.closed) {
+      existing.focus();
+      return;
+    }
+
+    const titles = { goals: 'Clinical Goals', context: 'Clinical Context' };
+    const sizes  = { goals: 'width=860,height=720', context: 'width=560,height=720' };
+    const w = window.open('', `rtv_${kind}_popup`, sizes[kind] + ',resizable=yes,scrollbars=yes');
+    if (!w) {
+      alert('Pop-out window was blocked by your browser. Please allow pop-ups for this site and try again.');
+      return;
+    }
+
+    w.document.open();
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">` +
+      `<title>${titles[kind]} — RT Plan Viewer</title>` +
+      `<style>${this.POPUP_CSS}</style></head>` +
+      `<body><h2>${titles[kind]}</h2>` +
+      `<div class="subhdr" id="subj-hdr">—</div>` +
+      `<div id="popout-body"></div>` +
+      `</body></html>`);
+    w.document.close();
+
+    this.windows[kind] = w;
+    this._refreshButton(kind);
+    this.refresh(kind);
+
+    // Close in-app panel since the popup now owns this content
+    if (kind === 'goals') {
+      document.getElementById('goals-panel').classList.remove('open');
+    } else {
+      document.getElementById('context-panel').style.right = '-420px';
+    }
+
+    // Poll for popup-closed state. window.closed flips true when the user
+    // closes the popup, even if they bypass beforeunload (e.g. via the
+    // close button). 500 ms is fast enough that the dock-back UI feels
+    // responsive without burning cycles.
+    if (this.pollers[kind]) clearInterval(this.pollers[kind]);
+    this.pollers[kind] = setInterval(() => {
+      const ww = this.windows[kind];
+      if (!ww || ww.closed) {
+        clearInterval(this.pollers[kind]);
+        this.pollers[kind] = null;
+        this.windows[kind] = null;
+        this._refreshButton(kind);
+      }
+    }, 500);
+  },
+
+  // Push the latest content into the popup's DOM. Safe to call even if
+  // popup is closed (no-op).
+  refresh(kind) {
+    const w = this.windows[kind];
+    if (!w || w.closed) return;
+    const subjHdr = w.document.getElementById('subj-hdr');
+    const body    = w.document.getElementById('popout-body');
+    if (!body) return;
+
+    if (subjHdr) {
+      subjHdr.textContent = S.currentSubject
+        ? `Subject: ${S.currentSubject}` + (S.currentSite ? `   (${S.currentSite})` : '')
+        : 'No subject loaded — return to the main window to select one.';
+    }
+
+    if (kind === 'goals') {
+      body.innerHTML = goalsHtml();
+    } else {
+      const text = contextText();
+      if (text.trim()) {
+        body.innerHTML = `<div class="ctx-text">${escapeHtml(text)}</div>`;
+      } else {
+        body.innerHTML = '<p class="empty">No clinical context provided for this subject.</p>';
+      }
+    }
+  },
+
+  // Close popup if open, otherwise open it. Wired to the panel header
+  // pop-out / dock-back button.
+  toggle(kind) {
+    const w = this.windows[kind];
+    if (w && !w.closed) {
+      w.close();
+      this.windows[kind] = null;
+      if (this.pollers[kind]) {
+        clearInterval(this.pollers[kind]);
+        this.pollers[kind] = null;
+      }
+      this._refreshButton(kind);
+    } else {
+      this.open(kind);
+    }
+  },
+
+  isOpen(kind) {
+    return !!(this.windows[kind] && !this.windows[kind].closed);
+  },
+
+  _refreshButton(kind) {
+    const btn = document.getElementById(`${kind}-popout-btn`);
+    if (!btn) return;
+    if (this.isOpen(kind)) {
+      btn.innerHTML = '↙ Dock back';
+      btn.classList.add('docked');
+      btn.title = 'Close pop-out window and return content to side panel';
+    } else {
+      btn.innerHTML = '↗ Pop out';
+      btn.classList.remove('docked');
+      btn.title = 'Open in separate window';
+    }
+  },
+};
+
+// Best-effort cleanup: close any popup windows when the main viewer is
+// being torn down. The browser will also close them automatically when
+// their opener navigates away, but doing it explicitly avoids orphan
+// windows in some browser/popup-blocker combinations.
+window.addEventListener('beforeunload', () => {
+  ['goals', 'context'].forEach(k => {
+    const w = PopOut.windows[k];
+    if (w && !w.closed) { try { w.close(); } catch (_) {} }
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Subject Dropdown — status indicators
@@ -1947,23 +2138,40 @@ function initControls() {
     Renderer.renderAll();
   });
 
-  // Clinical goals panel
+  // Clinical goals panel — top-bar button opens the in-app slide-out, OR
+  // focuses the pop-out window if one is currently open.
   document.getElementById('goals-btn').addEventListener('click', () => {
+    if (PopOut.isOpen('goals')) {
+      PopOut.windows.goals.focus();
+      return;
+    }
     document.getElementById('goals-panel').classList.toggle('open');
   });
   document.getElementById('goals-close-btn').addEventListener('click', () => {
     document.getElementById('goals-panel').classList.remove('open');
   });
+  document.getElementById('goals-popout-btn').addEventListener('click', () => {
+    PopOut.toggle('goals');
+  });
 
-  // Clinical context panel
+  // Clinical context panel — same dual behavior as goals.
   const ctxPanel = document.getElementById('context-panel');
   function toggleContext() {
     if (ctxPanel.style.right === '0px') ctxPanel.style.right = '-420px';
     else ctxPanel.style.right = '0px';
   }
-  document.getElementById('context-btn').addEventListener('click', toggleContext);
+  document.getElementById('context-btn').addEventListener('click', () => {
+    if (PopOut.isOpen('context')) {
+      PopOut.windows.context.focus();
+      return;
+    }
+    toggleContext();
+  });
   document.getElementById('context-close-btn').addEventListener('click', () => {
     ctxPanel.style.right = '-420px';
+  });
+  document.getElementById('context-popout-btn').addEventListener('click', () => {
+    PopOut.toggle('context');
   });
 }
 
