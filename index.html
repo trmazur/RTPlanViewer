@@ -321,19 +321,38 @@
     .plan-row[data-plan="B"] .row-label { color: var(--row-B); }
     .plan-row[data-plan="C"] .row-label { color: var(--row-C); }
 
-    .max-btn {
-      background: none;
+    /* Per-row maximize buttons — kept in DOM for backward-compat with
+       existing event handlers, but hidden in favor of the top-bar
+       Plan Focus control. */
+    .max-btn { display: none; }
+
+    /* Plan Focus segmented control (top bar) */
+    .plan-focus {
+      display: flex;
       border: 1px solid var(--border);
-      border-radius: 3px;
+      border-radius: 4px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .plan-focus button {
+      padding: 4px 11px;
+      border: none;
+      border-right: 1px solid var(--border);
+      background: var(--panel2);
       color: var(--text-dim);
       cursor: pointer;
-      font-size: 14px;
-      padding: 1px 3px;
-      line-height: 1;
-      margin: 0 2px 2px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      transition: all 0.15s;
     }
-    .max-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .max-btn.restore { color: var(--yellow); border-color: var(--yellow); }
+    .plan-focus button:last-child { border-right: none; }
+    .plan-focus button:hover:not(.active) { color: var(--accent); }
+    .plan-focus button.active { color: #fff; }
+    .plan-focus button[data-plan=""].active { background: var(--accent); }
+    .plan-focus button[data-plan="A"].active { background: var(--row-A); color: #0a0a0a; }
+    .plan-focus button[data-plan="B"].active { background: var(--row-B); color: #0a0a0a; }
+    .plan-focus button[data-plan="C"].active { background: var(--row-C); color: #0a0a0a; }
 
     .view-cell {
       flex: 1;
@@ -749,6 +768,15 @@
 
   <div style="flex:1"></div>
 
+  <span class="top-label">Plan:</span>
+  <div class="plan-focus" id="plan-focus">
+    <button data-plan="" class="active" title="Show all 3 plans (3×3 grid)">All</button>
+    <button data-plan="A" title="Focus Plan A only (1×3 horizontal)">A</button>
+    <button data-plan="B" title="Focus Plan B only (1×3 horizontal)">B</button>
+    <button data-plan="C" title="Focus Plan C only (1×3 horizontal)">C</button>
+  </div>
+
+  <div class="top-sep"></div>
   <button class="top-btn" id="context-btn">Clinical Context</button>
   <button class="top-btn" id="goals-btn">Clinical Goals</button>
   <button class="top-btn linked" id="link-btn" title="Toggle linked scrolling">Linked</button>

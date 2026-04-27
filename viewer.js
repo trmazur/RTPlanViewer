@@ -354,7 +354,16 @@ function applyLoadedData(data) {
     S.sliceIndep[p] = { axial: midAxial, coronal: midCoronal, sagittal: midSagittal };
     S.views[p] = { axial: vp(), coronal: vp(), sagittal: vp() };
   });
+  // Reset Plan Focus to "All" for the newly loaded subject — covers both
+  // the row layout (hidden max-btn state) and the top-bar segmented control.
   S.maximized = null;
+  PLANS.forEach(p => {
+    const row = document.getElementById(`row-${p}`);
+    if (row) row.classList.remove('maximized', 'minimized');
+  });
+  document.querySelectorAll('#plan-focus button').forEach(b => {
+    b.classList.toggle('active', b.dataset.plan === '');
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -986,6 +995,13 @@ function setMaximized(plan) {
       btn.textContent = '\u26F6';
       btn.classList.remove('restore');
     }
+  });
+  // Keep top-bar Plan Focus segmented control in sync, regardless of
+  // whether this was triggered by the segmented control, the (hidden)
+  // per-row max button, or a programmatic call.
+  const targetVal = plan || '';
+  document.querySelectorAll('#plan-focus button').forEach(b => {
+    b.classList.toggle('active', b.dataset.plan === targetVal);
   });
   setTimeout(() => Renderer.renderAll(), 250);
 }
@@ -1877,11 +1893,23 @@ function initControls() {
     Renderer.renderAll();
   });
 
-  // View mode
+  // View mode (orientation filter — sidebar dropdown)
   document.getElementById('view-mode').addEventListener('change', e => {
     S.viewMode = e.target.value;
     applyViewMode();
     setTimeout(() => Renderer.renderAll(), 100);
+  });
+
+  // Plan Focus (top bar segmented control) — orthogonal to orientation filter.
+  // Drives the same setMaximized() function used by the (now hidden) per-row
+  // max buttons, so existing maximize logic continues to work unchanged.
+  document.querySelectorAll('#plan-focus button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#plan-focus button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const plan = btn.dataset.plan || null;  // '' → null = show all
+      setMaximized(plan);
+    });
   });
 
   // Isodose add
