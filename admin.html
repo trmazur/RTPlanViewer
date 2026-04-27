@@ -401,6 +401,23 @@
     <div class="progress-bar hidden" id="val-progress"><div class="progress-fill" style="width:0%"></div></div>
     <div class="log-area hidden" id="val-log"></div>
     <div class="validation-grid hidden" id="val-results"></div>
+
+    <!-- Plan-count confirmation: gates Step 3 (contour mapping). Shown
+         only after a successful validation pass; the admin must confirm
+         the detected plan count before downstream steps unlock. -->
+    <div id="plan-count-confirm" class="hidden" style="margin-top:16px;padding:14px 18px;background:#1a2436;border:1px solid #4a9eff;border-radius:6px">
+      <div style="font-weight:700;font-size:14px;color:#fff;margin-bottom:8px">
+        Detected: <span id="pcc-count">—</span> plans (<span id="pcc-letters">—</span>)
+      </div>
+      <div id="pcc-identity-map" style="font-size:11px;color:var(--text-dim);margin-bottom:12px;font-family:'Consolas',monospace"></div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
+        <input type="checkbox" id="pcc-checkbox" style="width:18px;height:18px;cursor:pointer">
+        <span>I confirm this is a <b id="pcc-count-label">—</b>-plan comparison study.</span>
+      </label>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:8px;padding-left:26px">
+        Contour mapping (Step 3) will unlock once confirmed. Un-checking re-locks downstream steps.
+      </div>
+    </div>
   </div>
 
   <!-- Step 3: Contour Mapping -->
@@ -408,17 +425,20 @@
     <h2><span class="step-num">3</span> Contour Mapping</h2>
     <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
       Map each template structure to the corresponding contour in each plan's structure set.
-      Only structures mapped in <strong>all 3 plans</strong> will be visible to reviewers.
+      Only structures mapped in <strong id="mapping-allplans-label">all plans</strong> will be visible to reviewers.
     </p>
     <div id="mapping-summary" style="margin-bottom:12px"></div>
     <div class="table-scroll">
       <table class="mapping-table" id="mapping-table">
         <thead>
+          <!-- Header row is rebuilt dynamically by buildMappingUI() based
+               on the detected plan count (2 or 3 columns). The static
+               default below is just a placeholder for browsers that
+               render the page before JS runs. -->
           <tr>
             <th>Template Structure</th>
             <th>Plan 1</th>
             <th>Plan 2</th>
-            <th>Plan 3</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -795,7 +815,11 @@ const App = {
   dvhData: {},  // { folderName: { roiNumber: { type, doseUnit, data: [[dose,vol],...], min, max, mean } } }
   clinicalGoals: {},  // { planLabel: [ {struct, goal, criteria, value, status} ] }
   identityMap: {},  // { folderName: 'A'|'B'|'C' }
-  commonStructures: [],  // template IDs mapped in all 3 plans
+  commonStructures: [],  // template IDs mapped in all detected plans
+  // Variable plan count support: a subject may be a 2-plan or 3-plan
+  // comparison. Set during validation, gates downstream steps.
+  numPlans: 0,         // 2 or 3, derived from plan-folder count
+  planConfirmed: false, // user has ticked the confirmation checkbox
 
   log(area, msg, cls = '') {
     const el = document.getElementById(area);
@@ -1972,7 +1996,9 @@ function fuzzyMatch(templateName, roiNames) {
 // Identity Randomization
 // =============================================================================
 function randomizeIdentity(folderNames) {
-  const letters = ['A', 'B', 'C'];
+  // Slice the letter pool to the detected plan count (always start at A,
+  // never [A, C] — see design decision for variable plan count).
+  const letters = ['A', 'B', 'C'].slice(0, folderNames.length);
   // Fisher-Yates shuffle
   for (let i = letters.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -2089,14 +2115,18 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
   App.log(logArea, `Subject: ${subjectName}`, 'log-info');
   App.log(logArea, `Found ${folderNames.length} plan folders: ${folderNames.join(', ')}`, 'log-info');
 
-  // Validate: must have exactly 3
-  if (folderNames.length !== 3) {
-    App.log(logArea, `ERROR: Expected exactly 3 plan folders, found ${folderNames.length}`, 'log-err');
+  // Validate plan-folder count: must be 2 or 3 (variable plan count support).
+  // 1 or 4+ remain hard rejects.
+  if (folderNames.length < 2 || folderNames.length > 3) {
+    App.log(logArea, `ERROR: Expected 2 or 3 plan folders, found ${folderNames.length}`, 'log-err');
     document.getElementById('validation-status').classList.remove('hidden');
     document.getElementById('validation-status').innerHTML =
-      '<span class="badge badge-fail">INVALID: Need exactly 3 plan folders</span>';
+      `<span class="badge badge-fail">INVALID: Need 2 or 3 plan folders, found ${folderNames.length}</span>`;
+    // Re-lock downstream steps in case they were unlocked from a previous run
+    resetPlanCountConfirmation();
     return;
   }
+  App.numPlans = folderNames.length;
 
   App.setProgress('val-progress', 0);
   let planIdx = 0;
@@ -2245,18 +2275,86 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
     ? '<span class="badge badge-pass">Subject is VALID</span>'
     : '<span class="badge badge-fail">Subject has ISSUES — see details</span>';
 
-  if (allValid && App.templateStructures.length > 0) {
-    buildMappingUI();
-    document.getElementById('panel-mapping').classList.remove('hidden');
-    App.log(logArea, `\nContour mapping panel is now available below.`, 'log-ok');
-  } else if (allValid && App.templateStructures.length === 0) {
-    App.log(logArea, `\nSubject is valid. Load a clinical goal template (Step 1) to enable contour mapping.`, 'log-warn');
-  }
-
-  // Generate identity map
+  // Generate identity map (must happen before showing confirmation UI so
+  // the user can sanity-check the folder→letter assignment)
   App.identityMap = randomizeIdentity(folderNames);
 
+  if (allValid) {
+    // Show plan-count confirmation UI. Step 3 stays locked until the user
+    // ticks the confirmation checkbox.
+    showPlanCountConfirmation();
+    if (App.templateStructures.length === 0) {
+      App.log(logArea, `\nSubject is valid. Load a clinical goal template (Step 1) before confirming the plan count.`, 'log-warn');
+    }
+  } else {
+    resetPlanCountConfirmation();
+  }
+
   App.log(logArea, `\nValidation complete.`, 'log-ok');
+});
+
+// =============================================================================
+// Plan-Count Confirmation (gates Step 3)
+// =============================================================================
+
+// Populate and reveal the confirmation block based on current App state.
+function showPlanCountConfirmation() {
+  const block = document.getElementById('plan-count-confirm');
+  document.getElementById('pcc-count').textContent = App.numPlans;
+  document.getElementById('pcc-count-label').textContent = App.numPlans;
+  // Sorted letters list (always 'A, B' or 'A, B, C')
+  const letters = Object.values(App.identityMap).sort();
+  document.getElementById('pcc-letters').textContent = letters.join(', ');
+  // Identity map readout — admin can sanity check the folder→letter mapping
+  const mapLines = Object.entries(App.identityMap)
+    .sort((a, b) => a[1].localeCompare(b[1]))   // sort by letter A,B,C
+    .map(([folder, letter]) => `&nbsp;&nbsp;Plan ${letter} ← ${folder}`)
+    .join('<br>');
+  document.getElementById('pcc-identity-map').innerHTML = mapLines;
+  // Reset checkbox state (force a fresh confirmation on every validation pass)
+  document.getElementById('pcc-checkbox').checked = false;
+  App.planConfirmed = false;
+  block.classList.remove('hidden');
+  // Make sure mapping panel is hidden until confirmation
+  document.getElementById('panel-mapping').classList.add('hidden');
+}
+
+// Hide confirmation UI and re-lock all downstream steps. Called on a fresh
+// validation pass or when validation fails.
+function resetPlanCountConfirmation() {
+  App.planConfirmed = false;
+  document.getElementById('plan-count-confirm').classList.add('hidden');
+  document.getElementById('pcc-checkbox').checked = false;
+  document.getElementById('panel-mapping').classList.add('hidden');
+  document.getElementById('panel-goals').classList.add('hidden');
+  document.getElementById('panel-export').classList.add('hidden');
+}
+
+// Wire up the confirmation checkbox: ticking unlocks Step 3, un-ticking
+// re-locks Steps 3+ (defensive — protects against accidentally proceeding
+// after the admin notices the wrong plan count).
+document.getElementById('pcc-checkbox').addEventListener('change', (e) => {
+  App.planConfirmed = e.target.checked;
+  if (App.planConfirmed) {
+    if (App.templateStructures.length === 0) {
+      App.log('val-log', `Cannot proceed: load a clinical goal template (Step 1) first.`, 'log-warn');
+      e.target.checked = false;
+      App.planConfirmed = false;
+      return;
+    }
+    // Update dynamic UI text now that we know the plan count
+    document.getElementById('mapping-allplans-label').textContent = `all ${App.numPlans} plans`;
+    buildMappingUI();
+    document.getElementById('panel-mapping').classList.remove('hidden');
+    App.log('val-log', `\nContour mapping panel is now available below.`, 'log-ok');
+  } else {
+    // Un-tick: re-lock all downstream steps. Already-entered mappings stay
+    // in App.contourMappings but the panels are hidden.
+    document.getElementById('panel-mapping').classList.add('hidden');
+    document.getElementById('panel-goals').classList.add('hidden');
+    document.getElementById('panel-export').classList.add('hidden');
+    App.log('val-log', `\nPlan-count confirmation un-checked — downstream steps re-locked.`, 'log-warn');
+  }
 });
 
 
@@ -2274,15 +2372,11 @@ function buildMappingUI() {
     planRois[folder] = d.structures ? d.structures.map(s => s.name) : [];
   });
 
-  // Update table header with actual plan folder names
+  // Update table header with actual plan folder names. Column count
+  // matches the detected number of plans (2 or 3).
   const headerRow = document.querySelector('#mapping-table thead tr');
-  headerRow.innerHTML = `
-    <th>Template Structure</th>
-    <th>${App.planFolders[0]}</th>
-    <th>${App.planFolders[1]}</th>
-    <th>${App.planFolders[2]}</th>
-    <th>Status</th>
-  `;
+  const folderHeaders = App.planFolders.map(f => `<th>${f}</th>`).join('');
+  headerRow.innerHTML = `<th>Template Structure</th>${folderHeaders}<th>Status</th>`;
 
   // Build rows for each template structure
   App.templateStructures.forEach(ts => {
@@ -2338,18 +2432,20 @@ function updateMappingStatus() {
   let partialCount = 0;
   App.commonStructures = [];
 
+  const N = App.numPlans || 3;  // fall back to 3 for safety if not set yet
+
   rows.forEach(tr => {
     const selects = tr.querySelectorAll('.mapping-select');
     const mappedCount = [...selects].filter(s => s.value !== '').length;
     const statusCell = tr.querySelector('.mapping-status');
 
-    if (mappedCount === 3) {
-      statusCell.innerHTML = '<span class="common-indicator common-yes">All 3</span>';
+    if (mappedCount === N) {
+      statusCell.innerHTML = `<span class="common-indicator common-yes">All ${N}</span>`;
       tr.classList.remove('excluded');
       App.commonStructures.push(tr.dataset.templateId);
       commonCount++;
     } else if (mappedCount > 0) {
-      statusCell.innerHTML = `<span class="common-indicator common-no">${mappedCount}/3</span>`;
+      statusCell.innerHTML = `<span class="common-indicator common-no">${mappedCount}/${N}</span>`;
       tr.classList.add('excluded');
       partialCount++;
     } else {
@@ -2359,7 +2455,7 @@ function updateMappingStatus() {
   });
 
   document.getElementById('mapping-summary').innerHTML =
-    `<span class="badge badge-pass">${commonCount} structures mapped in all 3 plans</span> ` +
+    `<span class="badge badge-pass">${commonCount} structures mapped in all ${N} plans</span> ` +
     (partialCount > 0 ? `<span class="badge badge-warn">${partialCount} partially mapped (excluded)</span>` : '');
 
   document.getElementById('apply-mapping-btn').disabled = commonCount === 0;
@@ -2616,10 +2712,16 @@ document.getElementById('export-btn').addEventListener('click', async () => {
 
   const clinicalContext = (document.getElementById('clinical-context').value || '').trim();
 
+  // Sorted list of plan letters (e.g. ['A','B'] or ['A','B','C']) — the
+  // viewer reads this to know how many plan rows / rank rows to render.
+  const planLetters = Object.values(App.identityMap).sort();
+
   const manifest = {
     subject: App.subjectPath,
     site: App.siteConfig?.site || 'UNKNOWN',
     validatedAt: new Date().toISOString(),
+    plans: planLetters,                    // NEW: explicit plan list for variable plan count
+    numPlans: planLetters.length,          // NEW: convenience field, matches plans.length
     identityMap: App.identityMap,
     planFolders: App.planFolders,
     commonStructures: App.commonStructures,
@@ -2769,8 +2871,13 @@ document.getElementById('export-btn').addEventListener('click', async () => {
 
     App.setProgress('export-progress', 90);
 
-    // 4. Per-plan data
-    for (const letter of ['A', 'B', 'C']) {
+    // 4. Per-plan data — iterate only the plan letters that actually exist
+    // for this subject (2 or 3, in sorted order). Previously this looped
+    // over a hardcoded ['A','B','C'] and skipped missing entries via
+    // continue; the explicit list makes 2-plan support intentional rather
+    // than incidental.
+    const exportLetters = Object.values(App.identityMap).sort();
+    for (const letter of exportLetters) {
       const pe = planExports[letter];
       if (!pe) continue;
 
