@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XML Objective Editor</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #f4f7f9; 
+            color: #333; 
+            padding: 20px; 
+            margin: 0;
+        }
+        h1, h2, h3 { 
+            color: #2c3e50; 
+        }
+        h2 { 
+            border-bottom: 2px solid #e0e0e0; 
+            padding-bottom: 10px; 
+            margin-top: 40px; 
+        }
+        h3 {
+            margin-top: 0;
+        }
+        #main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        #controls { 
+            margin-bottom: 25px; 
+            padding: 20px; 
+            background-color: #fff; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        #fileInput {
+            border: 2px solid #bdc3c7;
+            border-radius: 5px;
+            padding: 8px;
+        }
+
+        #prescriptionContainer, #derivedStructuresContainer, #addObjectiveContainer, #unusedStructuresContainer {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 25px;
+        }
+        
+        #derivedStructuresContainer, #unusedStructuresContainer {
+            margin-top: 20px;
+        }
+
+        .add-target-form, .add-rule-form, .add-objective-form {
+            display: grid;
+            gap: 10px 20px;
+            align-items: center;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .add-target-form {
+            grid-template-columns: 2fr 1fr 1fr auto;
+        }
+
+        .add-rule-form {
+            grid-template-columns: 1fr 2fr auto;
+        }
+
+        .add-objective-form {
+            grid-template-columns: repeat(9, 1fr);
+        }
+
+        .add-objective-form .form-group {
+             min-width: 100px;
+        }
+        
+        .add-objective-form .button-group {
+            grid-column: 1 / -1; /* Make button span all columns */
+            justify-self: start;
+            margin-top: 10px;
+        }
+
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .form-group label {
+            font-size: 12px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .prescription-grid, .derived-grid, .unused-grid {
+            display: grid;
+            gap: 10px 20px;
+            align-items: center;
+        }
+
+        .prescription-grid {
+            grid-template-columns: 2fr 1fr auto;
+        }
+        
+        .derived-grid {
+             grid-template-columns: 1fr 1fr 2fr auto;
+        }
+        
+        .unused-grid {
+             grid-template-columns: 1fr 1fr auto;
+        }
+
+        .grid-header {
+            font-weight: bold;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+
+
+        .prescription-grid label {
+            font-weight: bold;
+        }
+
+        input, select {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
+            background-color: white; 
+        }
+        
+        select:disabled {
+            background-color: #f2f2f2;
+            cursor: not-allowed;
+        }
+
+        #objectivesContainer { 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 20px; 
+            align-items: flex-start;
+        }
+        .priority-group { 
+            flex: 1; 
+            min-width: 220px;
+            background-color: #ffffff; 
+            border-radius: 8px; 
+            padding: 15px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            min-height: 100px; 
+        }
+        .objective-item { 
+            background-color: #ecf0f1; 
+            border: 1px solid #bdc3c7; 
+            padding: 12px; 
+            margin-bottom: 10px; 
+            border-radius: 4px; 
+            cursor: grab; 
+            user-select: none; 
+            box-shadow: 0 2px 3px rgba(0,0,0,0.05);
+            transition: background-color 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+        .objective-item:hover {
+            background-color: #e0e6e8;
+        }
+        .objective-item:active { 
+            cursor: grabbing; 
+            background-color: #dbe1e3;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .objective-item .struct-id { 
+            font-weight: bold; 
+            color: #2980b9; 
+        }
+        .objective-item .goal-type { 
+            font-size: 0.9em; 
+            color: #7f8c8d; 
+            margin-top: 4px;
+            display: block;
+        }
+        .ghost-class { 
+            background-color: #3498db; 
+            opacity: 0.7; 
+            border-radius: 4px; 
+            border: 2px dashed #2980b9;
+        }
+        button, .delete-btn { 
+            background-color: #27ae60; 
+            color: white; 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            transition: background-color 0.3s; 
+        }
+
+        button:hover { 
+            background-color: #229954; 
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        .delete-btn {
+            background-color: #e74c3c;
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        .delete-btn:hover {
+             background-color: #c0392b;
+        }
+        
+        .objective-item .delete-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            padding: 2px 6px;
+            font-size: 10px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .objective-item:hover .delete-btn {
+            opacity: 1;
+        }
+
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 15px 25px;
+            border-radius: 8px;
+            color: white;
+            font-size: 16px;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.5s, visibility 0.5s, bottom 0.5s;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .notification.show {
+            opacity: 1;
+            visibility: visible;
+            bottom: 30px;
+        }
+
+        .notification.success {
+            background-color: #27ae60;
+        }
+
+        .notification.error {
+            background-color: #c0392b;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+</head>
+<body>
+
+    <div id="main-container">
+        <h1>XML Objective Editor</h1>
+
+        <div id="controls">
+            <input type="file" id="fileInput" accept=".xml">
+            <button id="saveButton" disabled>Save Updated XML</button>
+        </div>
+        
+        <div id="prescriptionContainer"></div>
+
+        <h2>Optimization Objectives</h2>
+        <div id="addObjectiveContainer"></div>
+        <div id="objectivesContainer"></div>
+
+        <div id="derivedStructuresContainer"></div>
+        
+        <div id="unusedStructuresContainer"></div>
+    </div>
+    
+    <div id="notification-box" class="notification"></div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const saveButton = document.getElementById('saveButton');
+        const prescriptionContainer = document.getElementById('prescriptionContainer');
+        const objectivesContainer = document.getElementById('objectivesContainer');
+        const derivedStructuresContainer = document.getElementById('derivedStructuresContainer');
+        const addObjectiveContainer = document.getElementById('addObjectiveContainer');
+        const unusedStructuresContainer = document.getElementById('unusedStructuresContainer');
+        let xmlDoc = null; 
+        let originalFileName = 'template.xml';
+        let structureNameMap = new Map();
+        let objectiveUuidMap = new Map();
+
+        function showNotification(message, isError = false) {
+            const notificationBox = document.getElementById('notification-box');
+            notificationBox.textContent = message;
+            notificationBox.className = 'notification show';
+            notificationBox.classList.add(isError ? 'error' : 'success');
+
+            setTimeout(() => {
+                notificationBox.className = 'notification';
+            }, 4000);
+        }
+
+        function updateXmlFromUi() {
+            if (!xmlDoc) return;
+
+            // --- Update Prescription Doses ---
+            const numFractionsInput = document.getElementById('numFractions');
+            if (numFractionsInput) {
+                document.querySelectorAll('.dose-input').forEach(input => {
+                    const targetId = input.dataset.targetId;
+                    const newDose = input.value;
+                    const pt = Array.from(xmlDoc.querySelectorAll('PrescriptionTarget')).find(p => p.querySelector('StructureId')?.textContent === targetId);
+                    if (pt) {
+                        const doseElement = pt.querySelector('FractionDoseGy');
+                        if (doseElement) {
+                            doseElement.textContent = newDose;
+                        }
+                    }
+                });
+            }
+
+            // --- Update Objective Priorities and Order ---
+            document.querySelectorAll('.priority-group').forEach(group => {
+                const list = group.querySelector('.objective-list');
+                const newPriority = list.getAttribute('data-priority');
+                list.querySelectorAll('.objective-item').forEach((item, index) => {
+                    const xmlElement = item.xmlElement;
+                    if (!xmlElement || !xmlDoc.contains(xmlElement)) return; // Ensure element is still in the document
+
+                    if (newPriority === '5') {
+                        xmlElement.querySelector('Priority')?.remove();
+                        xmlElement.querySelector('PriorityWithinGroup')?.remove();
+                    } else { 
+                        let priorityTag = xmlElement.querySelector('Priority');
+                        if (!priorityTag) {
+                            priorityTag = xmlDoc.createElement('Priority');
+                            xmlElement.appendChild(priorityTag);
+                        }
+                        priorityTag.textContent = newPriority;
+
+                        let priorityWithinGroupTag = xmlElement.querySelector('PriorityWithinGroup');
+                        if (!priorityWithinGroupTag) {
+                            priorityWithinGroupTag = xmlDoc.createElement('PriorityWithinGroup');
+                            xmlElement.appendChild(priorityWithinGroupTag);
+                        }
+                        priorityWithinGroupTag.textContent = index + 1;
+                    }
+                });
+            });
+        }
+        
+        function refreshAllDisplays() {
+            if (!xmlDoc) return;
+            structureNameMap = createStructureNameMap(xmlDoc);
+            displayPrescription(xmlDoc, structureNameMap);
+            displayAddObjectiveForm(); // Keep the form visible
+            displayObjectives(xmlDoc, structureNameMap);
+            displayDerivedStructures(xmlDoc, structureNameMap);
+            displayUnusedStructures(xmlDoc, structureNameMap);
+        }
+
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            originalFileName = file.name;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const xmlText = e.target.result;
+                const parser = new DOMParser();
+                xmlDoc = parser.parseFromString(xmlText, "application/xml");
+                
+                const parseError = xmlDoc.querySelector('parsererror');
+                if (parseError) {
+                    console.error('Error parsing XML:', parseError);
+                    showNotification('Error parsing XML file. Check console for details.', true);
+                    return;
+                }
+                refreshAllDisplays();
+            };
+            reader.readAsText(file);
+        });
+
+        function createStructureNameMap(doc) {
+            const nameMap = new Map();
+            const allStructures = Array.from(doc.querySelectorAll('OARs > Structure, Targets > Structure, ControlRegions > Structure'));
+            allStructures.forEach(struct => {
+                const id = struct.getAttribute('Id');
+                const name = struct.querySelector('Name')?.textContent;
+                if (id && name) {
+                    nameMap.set(id, name);
+                }
+            });
+            return nameMap;
+        }
+
+        function displayPrescription(doc, currentStructureNameMap) {
+            prescriptionContainer.innerHTML = '';
+            const prescriptionTargets = Array.from(doc.querySelectorAll('PrescriptionTarget'));
+            const numFractions = doc.querySelectorAll('PrescribedSessions > Session').length || 1;
+
+            if (prescriptionTargets.length === 0) {
+                prescriptionContainer.style.display = 'block';
+            }
+            
+            let content = `<h3>Prescription</h3><div id="prescription-grid-container" class="prescription-grid">`;
+            content += `<label for="numFractions">Number of Fractions</label><input type="number" id="numFractions" value="${numFractions}" min="1"><div></div>`; // Empty div for alignment
+            content += `<strong class="grid-header">Target Structure</strong><strong class="grid-header">Dose per Fraction (Gy)</strong><strong class="grid-header">Actions</strong>`;
+
+            prescriptionTargets.forEach((pt) => {
+                const structId = pt.querySelector('StructureId')?.textContent;
+                const dose = pt.querySelector('FractionDoseGy')?.textContent;
+                const structName = currentStructureNameMap.get(structId) || structId || 'Unknown Target';
+                content += `<span>${structName}</span>
+                                <input type="number" class="dose-input" value="${dose}" data-target-id="${structId}">
+                                <button class="delete-btn" data-del-id="${structId}" data-del-type="target">Delete</button>`;
+            });
+            content += '</div>';
+
+            content += `<div class="add-target-form">
+                                <input type="text" id="newTargetName" placeholder="New Target Name">
+                                 <select id="newTargetType">
+                                     <option value="GTV">GTV</option>
+                                     <option value="CTV">CTV</option>
+                                     <option value="ITV">ITV</option>
+                                     <option value="PTV">PTV</option>
+                                 </select>
+                                <input type="number" id="newTargetDose" placeholder="Dose/Fx">
+                                <button id="addTargetButton">Add</button>
+                            </div>`;
+
+            prescriptionContainer.innerHTML = content;
+
+            document.getElementById('addTargetButton').addEventListener('click', addNewTarget);
+            prescriptionContainer.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDeleteClick));
+        }
+
+        function addNewTarget() {
+            updateXmlFromUi();
+            const newName = document.getElementById('newTargetName').value;
+            const newDose = document.getElementById('newTargetDose').value;
+            const newType = document.getElementById('newTargetType').value;
+
+            if (!newName || !newDose || !xmlDoc) {
+                showNotification('Please provide a name and a dose for the new target.', true);
+                return;
+            }
+            
+            const targetTypeMap = {
+                'GTV': { code: 'R-429E0', meaning: 'Gross tumor volume', color: '4280900300' },
+                'CTV': { code: 'R-429EB', meaning: 'Clinical target volume', color: '4294944000' },
+                'ITV': { code: 'ITV', meaning: 'Internal target volume', color: '4286578688' },
+                'PTV': { code: 'R-429EC', meaning: 'Planning target volume', color: '4294901760' }
+            };
+            const selectedTypeInfo = targetTypeMap[newType];
+
+
+            let maxId = 0;
+            const allTargetIds = Array.from(xmlDoc.querySelectorAll('Targets > Structure'))
+                .map(s => parseInt(s.getAttribute('Id').replace('Target', ''), 10))
+                .filter(n => !isNaN(n));
+            if (allTargetIds.length > 0) maxId = Math.max(...allTargetIds);
+            const newTargetId = `Target${maxId + 1}`;
+
+            const targetsSection = xmlDoc.querySelector('Targets');
+            if (!targetsSection) {
+                showNotification('Could not find <Targets> section in the XML.', true);
+                return;
+            }
+            const newStructure = xmlDoc.createElement('Structure');
+            newStructure.setAttribute('Id', newTargetId);
+            newStructure.innerHTML = `
+                <Code>${selectedTypeInfo.code}</Code>
+                <Schema>SRT</Schema>
+                <SchemaVersion/>
+                <Meaning>${selectedTypeInfo.meaning}</Meaning>
+                <Color>${selectedTypeInfo.color}</Color>
+                <Name>${newName}</Name>
+            `;
+            targetsSection.appendChild(xmlDoc.createTextNode('\n    '));
+            targetsSection.appendChild(newStructure);
+            
+            const prescriptionTargetsSection = xmlDoc.querySelector('PrescriptionTargets');
+            if (!prescriptionTargetsSection) {
+                showNotification('Could not find <PrescriptionTargets> section in the XML.', true);
+                return;
+            }
+            const newPrescriptionTarget = xmlDoc.createElement('PrescriptionTarget');
+            newPrescriptionTarget.innerHTML = `
+    <StructureId>${newTargetId}</StructureId>
+    <FractionDoseGy>${newDose}</FractionDoseGy>
+    <QualityIndices/>
+    <Objectives/>
+  `;
+            prescriptionTargetsSection.appendChild(xmlDoc.createTextNode('\n      '));
+            prescriptionTargetsSection.appendChild(newPrescriptionTarget);
+            
+            structureNameMap.set(newTargetId, newName);
+            document.getElementById('newTargetName').value = '';
+            document.getElementById('newTargetDose').value = '';
+            showNotification(`Target '${newName}' added successfully.`);
+            refreshAllDisplays();
+        }
+
+        function displayAddObjectiveForm() {
+            addObjectiveContainer.innerHTML = `
+                <h3>Add New Objective</h3>
+                <div class="add-objective-form">
+                    <div class="form-group">
+                        <label>Structure Name</label>
+                        <input type="text" id="newObjectiveStructureName" placeholder="e.g., PTV_Brain">
+                    </div>
+                     <div class="form-group">
+                        <label>Structure Type</label>
+                        <select id="newObjectiveStructureType">
+                            <option value="Target">Target</option>
+                            <option value="ControlRegion">ControlRegion</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Objective Type</label>
+                        <select id="newObjectiveType">
+                            <option value="DoseVolume">DoseVolume</option>
+                            <option value="VolumeDose">VolumeDose</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label id="newObjectiveThresholdLabel">Threshold</label>
+                        <input type="number" id="newObjectiveThreshold" placeholder="Value">
+                    </div>
+                    <div class="form-group">
+                        <label id="newObjectiveThresholdUnitLabel">Threshold Units</label>
+                        <select id="newObjectiveThresholdUnit"></select>
+                    </div>
+                     <div class="form-group">
+                        <label>Inequality</label>
+                        <select id="newObjectiveQualifier">
+                            <option value="ShouldBeLessOrEqual">&lt;=</option>
+                            <option value="ShouldBeLess">&lt;</option>
+                            <option value="ShouldBeMoreOrEqual">&gt;=</option>
+                            <option value="ShouldBeMore">&gt;</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label id="newObjectiveGoalLabel">Goal</label>
+                        <input type="number" id="newObjectiveGoal" placeholder="Value">
+                    </div>
+                     <div class="form-group">
+                        <label id="newObjectiveGoalUnitLabel">Goal Units</label>
+                        <select id="newObjectiveGoalUnit"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Variation (Optional)</label>
+                        <input type="number" id="newObjectiveVariation" placeholder="Value">
+                    </div>
+                    <div class="form-group button-group">
+                         <button id="addObjectiveButton">Add Objective</button>
+                    </div>
+                </div>
+            `;
+
+            const typeSelect = document.getElementById('newObjectiveType');
+            const structTypeSelect = document.getElementById('newObjectiveStructureType');
+            
+            const updateFormControls = () => {
+                const isDoseVolume = typeSelect.value === 'DoseVolume';
+                const isControlRegion = structTypeSelect.value === 'ControlRegion';
+
+                const thresholdLabel = document.getElementById('newObjectiveThresholdLabel');
+                const thresholdUnitSelect = document.getElementById('newObjectiveThresholdUnit');
+                const goalLabel = document.getElementById('newObjectiveGoalLabel');
+                const goalUnitSelect = document.getElementById('newObjectiveGoalUnit');
+
+                const volUnits = `<option value="Relative">%</option><option value="Absolute">cm³</option>`;
+                const doseUnits = `<option value="Relative">%</option><option value="Absolute">Gy</option>`;
+                const doseUnitsAbsolute = `<option value="Absolute">Gy</option>`;
+
+                if (isDoseVolume) {
+                    thresholdLabel.textContent = 'Threshold (Volume)';
+                    thresholdUnitSelect.innerHTML = volUnits;
+                    thresholdUnitSelect.disabled = false;
+
+                    goalLabel.textContent = 'Goal (Dose)';
+                    goalUnitSelect.innerHTML = isControlRegion ? doseUnitsAbsolute : doseUnits;
+                    goalUnitSelect.disabled = isControlRegion;
+                    if (isControlRegion) goalUnitSelect.value = 'Absolute';
+                } else { // VolumeDose
+                    thresholdLabel.textContent = 'Threshold (Dose)';
+                    thresholdUnitSelect.innerHTML = isControlRegion ? doseUnitsAbsolute : doseUnits;
+                    thresholdUnitSelect.disabled = isControlRegion;
+                    if (isControlRegion) thresholdUnitSelect.value = 'Absolute';
+
+                    goalLabel.textContent = 'Goal (Volume)';
+                    goalUnitSelect.innerHTML = volUnits;
+                    goalUnitSelect.disabled = false;
+                }
+            };
+            
+            typeSelect.addEventListener('change', updateFormControls);
+            structTypeSelect.addEventListener('change', updateFormControls);
+            document.getElementById('addObjectiveButton').addEventListener('click', addNewObjective);
+            
+            updateFormControls(); // Initial setup
+        }
+
+        function addNewObjective() {
+            updateXmlFromUi();
+            const name = document.getElementById('newObjectiveStructureName').value;
+            const structType = document.getElementById('newObjectiveStructureType').value;
+            const objType = document.getElementById('newObjectiveType').value;
+            const threshold = document.getElementById('newObjectiveThreshold').value;
+            const thresholdUnit = document.getElementById('newObjectiveThresholdUnit').value;
+            const qualifier = document.getElementById('newObjectiveQualifier').value;
+            const goal = document.getElementById('newObjectiveGoal').value;
+            const goalUnit = document.getElementById('newObjectiveGoalUnit').value;
+            const variation = document.getElementById('newObjectiveVariation').value;
+
+            if (!name || !threshold || !goal) {
+                showNotification('Please fill in Structure Name, Threshold, and Goal.', true);
+                return;
+            }
+            
+            try {
+                const structureId = findOrCreateStructureId(name, structType);
+                const newObjectiveElement = xmlDoc.createElement('Objective');
+                
+                if (structType === 'ControlRegion') {
+                    const structIdElement = xmlDoc.createElement('StructureId');
+                    structIdElement.textContent = structureId;
+                    newObjectiveElement.appendChild(structIdElement);
+                }
+
+                const clinicalGoal = xmlDoc.createElement('ClinicalGoal');
+                clinicalGoal.innerHTML = `<Type>${objType}</Type><Qualifier>${qualifier}</Qualifier>`;
+
+                let doseValue, doseUnit, volValue, volUnit;
+                if (objType === 'DoseVolume') {
+                    volValue = threshold;
+                    volUnit = thresholdUnit;
+                    doseValue = goal;
+                    doseUnit = goalUnit;
+                } else { // VolumeDose
+                    doseValue = threshold;
+                    doseUnit = thresholdUnit;
+                    volValue = goal;
+                    volUnit = goalUnit;
+                }
+
+                const doseElement = xmlDoc.createElement('Dose');
+                doseElement.innerHTML = `<Value>${doseValue}</Value><Unit>${doseUnit}</Unit>`;
+                const volumeElement = xmlDoc.createElement('Volume');
+                volumeElement.innerHTML = `<Value>${volValue}</Value><Unit>${volUnit}</Unit>`;
+                
+                clinicalGoal.appendChild(volumeElement);
+                clinicalGoal.appendChild(doseElement);
+                newObjectiveElement.appendChild(clinicalGoal);
+
+                if (variation) {
+                    const acceptableVariation = xmlDoc.createElement('AcceptableVariation');
+                    acceptableVariation.innerHTML = `<Type>${objType}</Type><Qualifier>${qualifier}</Qualifier>`;
+
+                    let variationDoseValue, variationDoseUnit, variationVolValue, variationVolUnit;
+
+                    if (objType === 'DoseVolume') { // Goal is DOSE, Variation applies to DOSE
+                        variationVolValue = volValue;   
+                        variationVolUnit = volUnit;     
+                        variationDoseValue = variation; 
+                        variationDoseUnit = doseUnit;   
+                    } else { // VolumeDose, Goal is VOLUME, Variation applies to VOLUME
+                        variationDoseValue = doseValue; 
+                        variationDoseUnit = doseUnit;   
+                        variationVolValue = variation;  
+                        variationVolUnit = volUnit;     
+                    }
+
+                    const avDoseElement = xmlDoc.createElement('Dose');
+                    avDoseElement.innerHTML = `<Value>${variationDoseValue}</Value><Unit>${variationDoseUnit}</Unit>`;
+                    const avVolumeElement = xmlDoc.createElement('Volume');
+                    avVolumeElement.innerHTML = `<Value>${variationVolValue}</Value><Unit>${variationVolUnit}</Unit>`;
+
+                    acceptableVariation.appendChild(avVolumeElement);
+                    acceptableVariation.appendChild(avDoseElement);
+                    newObjectiveElement.appendChild(acceptableVariation);
+                }
+                
+                // Add to the correct location in the XML
+                if(structType === 'Target') {
+                    const prescriptionTarget = Array.from(xmlDoc.querySelectorAll('PrescriptionTarget')).find(pt => pt.querySelector('StructureId')?.textContent === structureId);
+                    if (!prescriptionTarget) throw new Error(`Could not find prescription target for ${name}. Add it to the prescription first.`);
+                    let objectivesEl = prescriptionTarget.querySelector('Objectives');
+                    if (!objectivesEl) {
+                        objectivesEl = xmlDoc.createElement('Objectives');
+                        prescriptionTarget.appendChild(objectivesEl);
+                    }
+                    objectivesEl.appendChild(newObjectiveElement);
+
+                } else { // ControlRegion or OAR
+                     const phaseOARs = xmlDoc.querySelector('PhaseOARObjectives');
+                     if(!phaseOARs) throw new Error('Could not find <PhaseOARObjectives> in XML.');
+                     phaseOARs.appendChild(newObjectiveElement);
+                }
+
+                showNotification(`Objective for '${name}' added to Reporting Only.`);
+                refreshAllDisplays();
+
+            } catch (error) {
+                showNotification(error.message, true);
+                console.error(error);
+            }
+        }
+        
+        function findOrCreateStructureId(name, type) {
+            // Check if structure with this name already exists
+            for (const [id, structName] of structureNameMap.entries()) {
+                if (structName === name) {
+                    return id; // Return existing ID
+                }
+            }
+
+            // If not, create it
+            showNotification(`Structure '${name}' not found. It will be created on save.`, false);
+            const isTarget = type === 'Target';
+            const section = isTarget ? 'Targets' : 'ControlRegions';
+            const idPrefix = isTarget ? 'Target' : 'ControlRegion';
+            const defaultColor = isTarget ? '4294901760' : '4289604044';
+            const defaultCode = isTarget ? 'R-429EC' : 'NormalTissue';
+            const defaultMeaning = isTarget ? 'Planning target volume' : 'Unidentified structure';
+            const defaultSchema = isTarget ? 'SRT' : '99VMS_STRUCTCODE';
+            const defaultSchemaVersion = isTarget ? '' : '1.0';
+            
+            const sectionElement = xmlDoc.querySelector(section);
+            if (!sectionElement) throw new Error(`<${section}> section not found in XML.`);
+
+            let maxId = 0;
+            sectionElement.querySelectorAll('Structure').forEach(s => {
+                 const idNum = parseInt(s.getAttribute('Id').replace(idPrefix, ''), 10);
+                 if (!isNaN(idNum) && idNum > maxId) maxId = idNum;
+            });
+            const newId = `${idPrefix}${maxId + 1}`;
+
+            const newStructure = xmlDoc.createElement('Structure');
+            newStructure.setAttribute('Id', newId);
+            newStructure.innerHTML = `
+                <Code>${defaultCode}</Code>
+                <Schema>${defaultSchema}</Schema>
+                <SchemaVersion>${defaultSchemaVersion}</SchemaVersion>
+                <Meaning>${defaultMeaning}</Meaning>
+                <Color>${defaultColor}</Color>
+                <Name>${name}</Name>
+            `;
+            sectionElement.appendChild(xmlDoc.createTextNode('\n    '));
+            sectionElement.appendChild(newStructure);
+
+            structureNameMap.set(newId, name);
+            return newId;
+        }
+
+        function displayObjectives(doc, currentStructureNameMap) {
+            objectivesContainer.innerHTML = ''; 
+            objectiveUuidMap.clear();
+            const objectives = Array.from(doc.querySelectorAll('Objective'));
+            
+            const groupedByPriority = objectives.reduce((acc, obj) => {
+                let priority = obj.querySelector('Priority')?.textContent || '5'; 
+                if (!acc[priority]) acc[priority] = [];
+                acc[priority].push(obj);
+                return acc;
+            }, {});
+
+            const priorityColumns = [
+                { value: '1', name: 'Priority 1' },
+                { value: '2', name: 'Priority 2' },
+                { value: '3', name: 'Priority 3' },
+                { value: '4', name: 'Priority 4' },
+                { value: '5', name: 'Reporting only' }
+            ];
+
+            priorityColumns.forEach(column => {
+                const priority = column.value;
+                const group = groupedByPriority[priority] || [];
+                const groupContainer = document.createElement('div');
+                groupContainer.className = 'priority-group';
+                
+                groupContainer.innerHTML = `<h2>${column.name}</h2>`;
+                const listContainer = document.createElement('div');
+                listContainer.className = 'objective-list';
+                listContainer.setAttribute('data-priority', priority);
+                
+                group.sort((a, b) => (parseInt(a.querySelector('PriorityWithinGroup')?.textContent || 0)) - (parseInt(b.querySelector('PriorityWithinGroup')?.textContent || 0)));
+                
+                group.forEach(obj => {
+                    let structId = obj.querySelector('StructureId')?.textContent || obj.closest('PrescriptionTarget')?.querySelector('StructureId')?.textContent;
+                    const structureName = currentStructureNameMap.get(structId) || structId || 'Unknown';
+                    const objectiveString = formatObjective(obj);
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'objective-item';
+                    
+                    // Assign a unique ID for deletion
+                    const objectiveUUID = `obj-${Math.random().toString(36).substr(2, 9)}`;
+                    objectiveUuidMap.set(objectiveUUID, obj);
+                    
+                    itemDiv.innerHTML = `<span class="struct-id">${structureName}</span><span class="goal-type">${objectiveString}</span>
+                                       <button class="delete-btn" data-del-id="${objectiveUUID}" data-del-type="objective">🗑️</button>`;
+                    itemDiv.xmlElement = obj;
+                    listContainer.appendChild(itemDiv);
+                });
+                groupContainer.appendChild(listContainer);
+                objectivesContainer.appendChild(groupContainer);
+            });
+
+            initializeDragAndDrop();
+            objectivesContainer.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDeleteClick));
+            saveButton.disabled = objectives.length === 0 && doc.querySelectorAll('PrescriptionTarget').length === 0;
+        }
+
+        function displayDerivedStructures(doc, currentStructureNameMap) {
+            derivedStructuresContainer.innerHTML = '';
+            const derivedStructures = Array.from(doc.querySelectorAll('Structure:has(ContouringProtocol)'));
+
+            let content = `<h2>Derived Structures</h2><div class="derived-grid">`;
+            content += `<strong class="grid-header">Structure Name</strong><strong class="grid-header">Type</strong><strong class="grid-header">Derivation Rule</strong><strong class="grid-header">Actions</strong>`;
+            
+            const parser = new DOMParser();
+
+            derivedStructures.forEach(struct => {
+                const name = struct.querySelector('Name')?.textContent || 'Unnamed';
+                const id = struct.getAttribute('Id');
+                let type = 'Unknown';
+                if (struct.closest('Targets')) type = 'Target';
+                else if (struct.closest('OARs')) type = 'OAR';
+                else if (struct.closest('ControlRegions')) type = 'Control Region';
+
+                const protocolText = struct.querySelector('ContouringProtocol')?.textContent;
+                let ruleString = 'Could not parse rule.';
+                if (protocolText) {
+                    try {
+                        const ruleDoc = parser.parseFromString(protocolText, 'application/xml');
+                        const arithmeticNode = ruleDoc.querySelector('StructureArithmetic > *');
+                        if (arithmeticNode) {
+                            ruleString = parseRule(arithmeticNode, currentStructureNameMap);
+                        }
+                    } catch(e) {
+                        console.error("Error parsing rule for display: ", e);
+                    }
+                }
+                
+                content += `<span>${name}</span><span>${type}</span><span>${ruleString}</span>
+                                <button class="delete-btn" data-del-id="${id}" data-del-type="derived">Delete</button>`;
+            });
+            content += '</div>';
+
+             content += `<div class="add-rule-form">
+                                <input type="text" id="newRuleName" placeholder="Structure Name">
+                                <input type="text" id="newRuleText" placeholder="e.g. (GTV1 + Body)">
+                                <button id="addRuleButton">Add/Update Rule</button>
+                            </div>`;
+
+            derivedStructuresContainer.innerHTML = content;
+            document.getElementById('addRuleButton').addEventListener('click', applyDerivationRule);
+            derivedStructuresContainer.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDeleteClick));
+        }
+        
+        function parseRule(element, currentStructureNameMap) {
+            const tagName = element.tagName;
+            const operands = Array.from(element.querySelectorAll(':scope > Operands > *'));
+            let operandStrings = operands.map(op => parseRule(op, currentStructureNameMap));
+
+            switch(tagName) {
+                case 'Structure':
+                    const structId = element.querySelector('Identifier')?.textContent;
+                    if (structId === 'Body') return 'Body';
+                    const name = currentStructureNameMap.get(structId);
+                    if (!name) throw new Error(`Unknown structure ID in rule: ${structId}`);
+                    return name;
+                case 'Union': return `(${operandStrings.join(' + ')})`;
+                case 'Intersection': return `(${operandStrings.join(' & ')})`;
+                case 'Subtraction': return `(${operandStrings.join(' - ')})`;
+                case 'Wall':
+                    const inner = element.querySelector('InnerWallValue')?.textContent;
+                    const outer = element.querySelector('OuterWallValue')?.textContent;
+                    return `Wall[inner:${parseFloat(inner)/10}cm, outer:${parseFloat(outer)/10}cm](${operandStrings.join('')})`;
+                case 'Margin':
+                    const margin = element.querySelector('MarginValue')?.textContent;
+                    return `Margin[${parseFloat(margin)/10}cm](${operandStrings.join('')})`;
+                default:
+                    if (operandStrings.length > 0) return operandStrings.join('');
+                    throw new Error(`Unknown rule operation: ${tagName}`);
+            }
+        }
+
+        function applyDerivationRule() {
+            updateXmlFromUi();
+            const name = document.getElementById('newRuleName').value.trim();
+            const ruleText = document.getElementById('newRuleText').value.trim();
+
+            if (!name || !ruleText) {
+                showNotification('Please provide a structure name and a rule.', true);
+                return;
+            }
+
+            try {
+                const nameToIdMap = new Map([...structureNameMap.entries()].map(([id, name]) => [name, id]));
+                const arithmeticXml = buildXmlFromRule(ruleText, nameToIdMap);
+                
+                const tempParser = new DOMParser();
+                const tempRuleDoc = tempParser.parseFromString(`<StructureArithmetic>${arithmeticXml}</StructureArithmetic>`, 'application/xml');
+                
+                if (tempRuleDoc.querySelector('parsererror')) {
+                    throw new Error("Rule has invalid XML syntax.");
+                }
+
+                const arithmeticNode = tempRuleDoc.querySelector('StructureArithmetic > *');
+                if (!arithmeticNode) throw new Error("Rule is empty or invalid.");
+                
+                parseRule(arithmeticNode, structureNameMap);
+                
+                let structureElement = Array.from(xmlDoc.querySelectorAll('Structure > Name')).find(el => el.textContent === name)?.parentElement;
+
+                if (!structureElement) {
+                    let maxId = 0;
+                    xmlDoc.querySelectorAll('ControlRegions > Structure').forEach(s => {
+                         const idNum = parseInt(s.getAttribute('Id').replace('ControlRegion', ''), 10);
+                         if (!isNaN(idNum) && idNum > maxId) maxId = idNum;
+                    });
+                    const newId = `ControlRegion${maxId + 1}`;
+                    
+                    structureElement = xmlDoc.createElement('Structure');
+                    structureElement.setAttribute('Id', newId);
+                    structureElement.innerHTML = `
+            <Code>NormalTissue</Code>
+            <Schema>99VMS_STRUCTCODE</Schema>
+            <SchemaVersion>1.0</SchemaVersion>
+            <Meaning>Unidentified structure</Meaning>
+            <Color>4289604044</Color>
+            <Name>${name}</Name>
+                        `;
+                    xmlDoc.querySelector('ControlRegions').appendChild(structureElement);
+                    structureNameMap.set(newId, name);
+                }
+
+                let protocol = structureElement.querySelector('ContouringProtocol');
+                if (!protocol) {
+                    protocol = xmlDoc.createElement('ContouringProtocol');
+                    structureElement.appendChild(protocol);
+                }
+                
+                while (protocol.firstChild) protocol.removeChild(protocol.firstChild);
+
+                const cdataContent = `<StructureArithmetic>${arithmeticXml}</StructureArithmetic>`;
+                const cdataNode = xmlDoc.createCDATASection(cdataContent);
+                protocol.appendChild(cdataNode);
+
+                
+                document.getElementById('newRuleName').value = '';
+                document.getElementById('newRuleText').value = '';
+                showNotification(`Rule for '${name}' applied successfully.`);
+                refreshAllDisplays();
+
+            } catch (error) {
+                showNotification(`Error: ${error.message}`, true);
+            }
+        }
+
+        function buildXmlFromRule(rule, nameToIdMap) {
+            rule = rule.trim();
+            if (rule.startsWith('(') && rule.endsWith(')')) {
+                let balance = 0;
+                let isOuter = true;
+                for (let i = 0; i < rule.length - 1; i++) {
+                    if (rule[i] === '(') balance++;
+                    if (rule[i] === ')') balance--;
+                    if (balance === 0) {
+                        isOuter = false;
+                        break;
+                    }
+                }
+                if (isOuter) return buildXmlFromRule(rule.substring(1, rule.length - 1), nameToIdMap);
+            }
+            
+            const operators = ['+', '-', '&'];
+            for (const op of operators) {
+                let balance = 0;
+                for (let i = rule.length - 1; i >= 0; i--) {
+                    const char = rule[i];
+                    if (char === ')' || char === ']') balance++;
+                    if (char === '(' || char === '[') balance--;
+                    if (balance === 0 && char === op) {
+                        const left = buildXmlFromRule(rule.substring(0, i), nameToIdMap);
+                        const right = buildXmlFromRule(rule.substring(i + 1), nameToIdMap);
+                        const opMap = { '+': 'Union', '-': 'Subtraction', '&': 'Intersection' };
+                        return `<${opMap[op]}><Operands>${left}${right}</Operands></${opMap[op]}>`;
+                    }
+                }
+            }
+
+            const marginMatch = rule.match(/^Margin\[(-?\d*\.?\d+)cm\]\((.*)\)$/i);
+            if (marginMatch) {
+                const value = parseFloat(marginMatch[1]) * 10;
+                if (isNaN(value)) throw new Error('Invalid margin value.');
+                const operandXml = buildXmlFromRule(marginMatch[2], nameToIdMap);
+                return `<Margin><Operands>${operandXml}</Operands><MarginValue>${value}</MarginValue></Margin>`;
+            }
+
+            const wallMatch = rule.match(/^Wall\[inner:(-?\d*\.?\d+)cm, outer:(-?\d*\.?\d+)cm\]\((.*)\)$/i);
+            if(wallMatch) {
+                 const inner = parseFloat(wallMatch[1]) * 10;
+                 const outer = parseFloat(wallMatch[2]) * 10;
+                 if (isNaN(inner) || isNaN(outer)) throw new Error('Invalid wall values.');
+                 const operandXml = buildXmlFromRule(wallMatch[3], nameToIdMap);
+                 return `<Wall><Operands>${operandXml}</Operands><InnerWallValue>${inner}</InnerWallValue><OuterWallValue>${outer}</OuterWallValue></Wall>`;
+            }
+
+            if (rule.toLowerCase() === 'body') {
+                return `<Structure>
+                                <Identifier>Body</Identifier>
+                                <ClassificationCode>
+                                    <Code>BODY</Code>
+                                    <Schema>99VMS_STRUCTCODE</Schema>
+                                    <SchemaVersion>1.0</SchemaVersion>
+                                    <Meaning>Body plus other external items</Meaning>
+                                </ClassificationCode>
+                            </Structure>`;
+            }
+
+            const id = nameToIdMap.get(rule);
+            if (!id) throw new Error(`Structure "${rule}" not found.`);
+            const structNode = xmlDoc.querySelector(`Structure[Id="${id}"]`);
+            if(!structNode) throw new Error(`Could not find full definition for structure "${rule}"`);
+            
+            return `<Structure>
+                        <Identifier>${id}</Identifier>
+                        <ClassificationCode>
+                            <Code>${structNode.querySelector('Code')?.textContent || ''}</Code>
+                            <Schema>${structNode.querySelector('Schema')?.textContent || ''}</Schema>
+                            <SchemaVersion>${structNode.querySelector('SchemaVersion')?.textContent || ''}</SchemaVersion>
+                            <Meaning>${structNode.querySelector('Meaning')?.textContent || ''}</Meaning>
+                        </ClassificationCode>
+                    </Structure>`;
+        }
+        
+        function getFormattedGoalString(goalElement) {
+            if (!goalElement) return '';
+            const type = goalElement.querySelector('Type')?.textContent;
+            const qualifier = goalElement.querySelector('Qualifier')?.textContent;
+            const volValStr = goalElement.querySelector('Volume > Value')?.textContent;
+            const volUnit = goalElement.querySelector('Volume > Unit')?.textContent === 'Absolute' ? 'cm³' : '%';
+            const doseValStr = goalElement.querySelector('Dose > Value')?.textContent;
+            const doseUnit = goalElement.querySelector('Dose > Unit')?.textContent === 'Absolute' ? 'Gy' : '%';
+            const qualifierSymbols = {'ShouldBeLessOrEqual': '<=','ShouldBeMoreOrEqual': '>=','ShouldBeLess': '<','ShouldBeMore': '>','ShouldBeEqual': '=='};
+            const symbol = qualifierSymbols[qualifier] || qualifier;
+            if (!volValStr || !doseValStr) return type || 'Incomplete Goal';
+            const volVal = !isNaN(parseFloat(volValStr)) ? parseFloat(volValStr).toFixed(2) : volValStr;
+            const doseVal = !isNaN(parseFloat(doseValStr)) ? parseFloat(doseValStr).toFixed(2) : doseValStr;
+            if (type === 'DoseVolume') return `D${volVal}${volUnit} ${symbol} ${doseVal}${doseUnit}`;
+            if (type === 'VolumeDose') return `V${doseVal}${doseUnit} ${symbol} ${volVal}${volUnit}`;
+            return type;
+        }
+        
+        function formatObjective(objElement) {
+            const clinicalGoal = objElement.querySelector('ClinicalGoal');
+            const variationGoal = objElement.querySelector('AcceptableVariation');
+            let objectiveString = getFormattedGoalString(clinicalGoal);
+            
+            if (variationGoal) {
+                const goalType = clinicalGoal.querySelector('Type')?.textContent;
+                const qualifier = variationGoal.querySelector('Qualifier')?.textContent;
+                const qualifierSymbols = { 'ShouldBeLessOrEqual': '<=', 'ShouldBeMoreOrEqual': '>=', 'ShouldBeLess': '<', 'ShouldBeMore': '>', 'ShouldBeEqual': '==' };
+                const symbol = qualifierSymbols[qualifier] || qualifier;
+
+                let variationString = '';
+
+                if (goalType === 'VolumeDose') { // Variation applies to Volume
+                    const variationVolume = variationGoal.querySelector('Volume > Value');
+                    if (variationVolume) {
+                        const valStr = variationVolume.textContent;
+                        const val = !isNaN(parseFloat(valStr)) ? parseFloat(valStr).toFixed(2) : valStr;
+                        const unit = variationGoal.querySelector('Volume > Unit')?.textContent === 'Absolute' ? 'cm³' : '%';
+                        variationString = `${symbol} ${val}${unit}`;
+                    }
+                } else if (goalType === 'DoseVolume') { // Variation applies to Dose
+                    const variationDose = variationGoal.querySelector('Dose > Value');
+                    if (variationDose) {
+                        const valStr = variationDose.textContent;
+                        const val = !isNaN(parseFloat(valStr)) ? parseFloat(valStr).toFixed(2) : valStr;
+                        const unit = variationGoal.querySelector('Dose > Unit')?.textContent === 'Absolute' ? 'Gy' : '%';
+                        variationString = `${symbol} ${val}${unit}`;
+                    }
+                }
+
+                if (variationString) {
+                    objectiveString += ` (${variationString})`;
+                }
+            }
+            return objectiveString || 'No Goal';
+        }
+
+        function initializeDragAndDrop() {
+            document.querySelectorAll('.priority-group').forEach(group => {
+                new Sortable(group.querySelector('.objective-list'), { 
+                    group: 'shared-objectives', 
+                    animation: 150, 
+                    ghostClass: 'ghost-class'
+                });
+            });
+        }
+        
+        function formatXml(xml) {
+            const PADDING = '  '; // 2 spaces
+            let formatted = '';
+            let pad = 0;
+            const declaration = xml.match(/^<\?xml.*\?>\s*/);
+
+            // Take XML declaration off
+            if (declaration) {
+                formatted = declaration[0];
+                xml = xml.substring(declaration[0].length);
+            }
+            
+            // Tidy up the XML by removing existing whitespace between tags
+            xml = xml.replace(/>\s*</g, '><').trim();
+
+            // Add newlines after each tag
+            const reg = /(>)(<)(\/*)/g;
+            xml = xml.replace(reg, '$1\r\n$2$3');
+            
+            const nodes = xml.split('\r\n');
+            
+            nodes.forEach(node => {
+                const trimmedNode = node.trim();
+                if (!trimmedNode) return;
+
+                let indent = 0;
+                let padding = '';
+                
+                // This is a closing tag, so we de-indent before printing it
+                if (trimmedNode.match(/^<\/\w/)) {
+                     pad = Math.max(0, pad - 1);
+                }
+
+                for (let i = 0; i < pad; i++) {
+                    padding += PADDING;
+                }
+
+                formatted += padding + trimmedNode + '\r\n';
+
+                // If it's an opening tag that is NOT self-closing and NOT a single-line tag, we indent the next line
+                if (trimmedNode.match(/^<(\w+)\b[^>]*>.*<\/(\1)>$/) || trimmedNode.match(/^<\w[^>]*\/>$/)) {
+                     // It's a single line tag like <Name>Bones</Name> or <SchemaVersion/>, so no change in indent
+                     indent = 0;
+                } else if (trimmedNode.match(/^<\w[^>]*[^\/]>.*$/)) { // It's an opening tag
+                     indent = 1;
+                }
+                
+                pad += indent;
+            });
+
+            return formatted.trim();
+        }
+
+        saveButton.addEventListener('click', () => {
+            if (!xmlDoc) return;
+
+            // Sync all UI changes to the xmlDoc before saving
+            updateXmlFromUi();
+
+            // Handle the session count update, which is a save-specific action
+            const numFractionsInput = document.getElementById('numFractions');
+            if (numFractionsInput) {
+                const newNumFractions = parseInt(numFractionsInput.value, 10);
+                const sessionsContainer = xmlDoc.querySelector('PrescribedSessions');
+                if (sessionsContainer) {
+                    while (sessionsContainer.firstChild) sessionsContainer.removeChild(sessionsContainer.firstChild);
+                    for (let i = 1; i <= newNumFractions; i++) {
+                        const session = xmlDoc.createElement('Session');
+                        session.setAttribute('Id', String(i));
+                        const phaseRef = xmlDoc.createElement('ReferencedPhase');
+                        phaseRef.textContent = '1';
+                        const imaging = xmlDoc.createElement('Imaging');
+                        imaging.textContent = 'None';
+                        session.appendChild(xmlDoc.createTextNode('\n        '));
+                        session.appendChild(phaseRef);
+                        session.appendChild(xmlDoc.createTextNode('\n        '));
+                        session.appendChild(imaging);
+                        session.appendChild(xmlDoc.createTextNode('\n      '));
+                        sessionsContainer.appendChild(xmlDoc.createTextNode('\n      '));
+                        sessionsContainer.appendChild(session);
+                    }
+                    if (newNumFractions > 0) sessionsContainer.appendChild(xmlDoc.createTextNode('\n    '));
+                }
+            }
+            
+            const serializer = new XMLSerializer();
+            const rawXmlString = serializer.serializeToString(xmlDoc);
+            const formattedXmlString = formatXml(rawXmlString);
+
+            const blob = new Blob([formattedXmlString], { type: 'application/xml' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = originalFileName.replace('.xml', '_updated.xml');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+        });
+        
+        // --- DELETION LOGIC ---
+        
+        function handleDeleteClick(event) {
+            updateXmlFromUi();
+            const button = event.target;
+            const id = button.dataset.delId;
+            const type = button.dataset.delType;
+            let name;
+
+            // Determine the name for the notification message
+            if (type === 'objective') {
+                const objectiveEl = objectiveUuidMap.get(id);
+                if (objectiveEl) {
+                    const structId = objectiveEl.querySelector('StructureId')?.textContent || objectiveEl.closest('PrescriptionTarget')?.querySelector('StructureId')?.textContent;
+                    const structName = structureNameMap.get(structId) || "Unknown Structure";
+                    name = `objective for ${structName}`;
+                } else {
+                    name = 'unknown objective';
+                }
+            } else {
+                name = structureNameMap.get(id) || id;
+            }
+
+            switch(type) {
+                case 'objective':
+                    deleteObjective(id);
+                    break;
+                case 'derived':
+                    deleteDerivedStructure(id);
+                    break;
+                case 'target':
+                    deleteTarget(id);
+                    break;
+                case 'unused':
+                    deleteUnusedStructure(id);
+                    break;
+            }
+            showNotification(`'${name}' deleted.`);
+            refreshAllDisplays();
+        }
+
+        function deleteObjective(objectiveUUID) {
+            if (!xmlDoc) return;
+            const objectiveEl = objectiveUuidMap.get(objectiveUUID);
+            if (objectiveEl) {
+                objectiveEl.remove();
+                objectiveUuidMap.delete(objectiveUUID);
+            }
+        }
+
+        function deleteDerivedStructure(structureId) {
+             if (!xmlDoc) return;
+             const structEl = xmlDoc.querySelector(`Structure[Id="${structureId}"]`);
+             if (structEl) {
+                 structEl.querySelector('ContouringProtocol')?.remove();
+             }
+        }
+        
+        function deleteTarget(structureId) {
+            if (!xmlDoc) return;
+
+            // 1. Remove prescription target
+            xmlDoc.querySelectorAll('PrescriptionTarget').forEach(pt => {
+                const idElement = pt.querySelector('StructureId');
+                if (idElement && idElement.textContent === structureId) {
+                    pt.remove();
+                }
+            });
+            
+            // 2. Remove structure from <Targets>
+            xmlDoc.querySelector(`Targets > Structure[Id="${structureId}"]`)?.remove();
+
+            // 3. Handle cascading deletes for derived structures
+            let checkAgain = true;
+            while(checkAgain) {
+                checkAgain = false;
+                const allStructuresWithRules = Array.from(xmlDoc.querySelectorAll('Structure')).filter(s => s.querySelector('ContouringProtocol'));
+                
+                allStructuresWithRules.forEach(derivedStruct => {
+                    const derivedId = derivedStruct.getAttribute('Id');
+                    const rule = derivedStruct.querySelector('ContouringProtocol')?.textContent || '';
+                    const ruleIds = getAllStructureIdsInRule(rule);
+                    
+                    if (ruleIds.includes(structureId)) {
+                        deleteDerivedStructure(derivedId); // This will recursively clean up
+                        checkAgain = true; 
+                    }
+                });
+            }
+        }
+        
+        function deleteUnusedStructure(structureId) {
+            if (!xmlDoc) return;
+            xmlDoc.querySelector(`Structure[Id="${structureId}"]`)?.remove();
+        }
+
+        // --- DELETION HELPER FUNCTIONS ---
+        
+        function getObjectivesForStructure(structureId) {
+            if (!xmlDoc) return [];
+            return Array.from(xmlDoc.querySelectorAll('Objective')).filter(obj => {
+                const objStructId = obj.querySelector('StructureId')?.textContent || obj.closest('PrescriptionTarget')?.querySelector('StructureId')?.textContent;
+                return objStructId === structureId;
+            });
+        }
+        
+        function isTarget(structureId) {
+            return !!xmlDoc.querySelector(`Targets > Structure[Id="${structureId}"]`);
+        }
+        
+        function isDerivedStructure(structureId) {
+             return !!xmlDoc.querySelector(`Structure[Id="${structureId}"] > ContouringProtocol`);
+        }
+
+        function isStructureInAnyRule(structureId) {
+            const allRules = Array.from(xmlDoc.querySelectorAll('ContouringProtocol'));
+            return allRules.some(rule => {
+                const ruleText = rule.textContent || '';
+                const idsInRule = getAllStructureIdsInRule(ruleText);
+                return idsInRule.includes(structureId);
+            });
+        }
+        
+        function getAllStructureIdsInRule(ruleText) {
+             if (!ruleText) return [];
+             const parser = new DOMParser();
+             const ruleDoc = parser.parseFromString(ruleText, 'application/xml');
+             const identifiers = Array.from(ruleDoc.querySelectorAll('Identifier'));
+             return identifiers.map(idEl => idEl.textContent);
+         }
+        
+        function displayUnusedStructures(doc, currentStructureNameMap) {
+            unusedStructuresContainer.innerHTML = '';
+            
+            const allStructs = Array.from(doc.querySelectorAll('Structure'));
+            const unused = [];
+            
+            const allIdsInRules = Array.from(doc.querySelectorAll('ContouringProtocol')).flatMap(p => getAllStructureIdsInRule(p.textContent));
+
+            allStructs.forEach(s => {
+                const id = s.getAttribute('Id');
+                if (id === 'Body') return;
+                
+                const isTgt = isTarget(id);
+                const hasObjs = getObjectivesForStructure(id).length > 0;
+                const isDerived = isDerivedStructure(id);
+                const isInRule = allIdsInRules.includes(id);
+
+                if (!isTgt && !hasObjs && !isDerived && !isInRule) {
+                    unused.push(s);
+                }
+            });
+
+            let content = `<h2>Unused Structures</h2>`;
+            if (unused.length === 0) {
+                 content += `<p>No unused structures found.</p>`;
+            } else {
+                 content += `<div class="unused-grid">
+                                 <strong class="grid-header">Structure Name</strong>
+                                 <strong class="grid-header">Type</strong>
+                                 <strong class="grid-header">Actions</strong>`;
+                 unused.forEach(s => {
+                     const id = s.getAttribute('Id');
+                     const name = s.querySelector('Name')?.textContent || 'Unnamed';
+                     let type = 'Unknown';
+                     if (s.closest('Targets')) type = 'Target';
+                     else if (s.closest('OARs')) type = 'OAR';
+                     else if (s.closest('ControlRegions')) type = 'Control Region';
+                     content += `<span>${name}</span><span>${type}</span><button class="delete-btn" data-del-id="${id}" data-del-type="unused">Delete</button>`;
+                 });
+                 content += '</div>';
+            }
+             unusedStructuresContainer.innerHTML = content;
+             unusedStructuresContainer.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDeleteClick));
+        }
+
+    </script>
+
+</body>
+</html>
+
+

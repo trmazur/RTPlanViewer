@@ -70,6 +70,8 @@ const S = {
   clinicalGoals: { A: [], B: [], C: [] },
   currentSite: '',
   currentSubject: '',
+  currentSubjects: [],   // cached subject list for active site
+  rankingStatus: {},     // { subjectName: { phase1: bool, phase2: bool } }
 
   getSlice(plan, orient) {
     return this.linked ? this.slice[orient] : this.sliceIndep[plan][orient];
@@ -224,6 +226,17 @@ const DataLoader = {
       const data = await resp.json();
       return data.exists ? data.ranking : null;
     } catch (e) { return null; }
+  },
+
+  async loadRankingStatus(site, reviewer) {
+    if (!site || !reviewer) return {};
+    try {
+      const resp = await fetch(
+        `/api/ranking-status?site=${encodeURIComponent(site)}&reviewer=${encodeURIComponent(reviewer)}`
+      );
+      if (!resp.ok) return {};
+      return await resp.json();
+    } catch (e) { return {}; }
   },
 
   async saveRanking(data) {
@@ -1331,7 +1344,8 @@ function renderClinicalGoals() {
   const priorities = [...new Set(allGoals.map(g => g.priority))].sort((a, b) => a - b);
 
   priorities.forEach(pri => {
-    html += `<tr class="priority-hdr"><td colspan="6">Priority ${pri}</td></tr>`;
+    const priLabel = pri === 99 ? 'Reporting Only' : `Priority ${pri}`;
+    html += `<tr class="priority-hdr"><td colspan="6">${priLabel}</td></tr>`;
 
     const goalsAtPri = allGoals.filter(g => g.priority === pri);
     goalsAtPri.forEach((goal, gIdx) => {
@@ -1360,6 +1374,86 @@ function renderClinicalGoals() {
   html += '</tbody></table>';
   content.innerHTML = html;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Subject Dropdown — status indicators
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Returns CSS class suffix for a subject's current ranking status
+function getStatusClass(subjectName) {
+  const st = S.rankingStatus[subjectName];
+  if (!st) return 'none';
+  if (st.phase1 && st.phase2) return 'both';
+  if (st.phase1) return 'phase1';
+  return 'none';
+}
+
+// Rebuild the full subject list inside the dropdown
+function renderSubjectDropdown() {
+  const items = document.getElementById('subj-items');
+  if (!items) return;
+  items.innerHTML = '';
+
+  S.currentSubjects.forEach(subj => {
+    const item = document.createElement('div');
+    item.className = 'subj-item' +
+      (subj.name === S.currentSubject ? ' selected' : '') +
+      (subj.status !== 'processed' ? ' subj-disabled' : '');
+    item.dataset.name = subj.name;
+
+    const dot = document.createElement('span');
+    dot.className = `sdot sdot-${getStatusClass(subj.name)}`;
+    dot.id = `sdot-${CSS.escape(subj.name)}`;
+
+    const label = document.createElement('span');
+    label.textContent = subj.name + (subj.status !== 'processed' ? ' (not processed)' : '');
+    label.style.flex = '1';
+
+    item.append(dot, label);
+
+    if (subj.status === 'processed') {
+      item.addEventListener('click', () => subjectDropdownSelect(subj.name));
+    }
+    items.appendChild(item);
+  });
+}
+
+// Update just the status dot for one subject (after a submission)
+function updateSubjectStatus(subjectName) {
+  const cls = `sdot sdot-${getStatusClass(subjectName)}`;
+  // Dot inside the list
+  try {
+    const dot = document.getElementById(`sdot-${CSS.escape(subjectName)}`);
+    if (dot) dot.className = cls;
+  } catch (e) { /* CSS.escape not available in very old browsers */ }
+  // Dot on the trigger button (if this is the loaded subject)
+  if (subjectName === S.currentSubject) {
+    const triggerDot = document.getElementById('subj-trigger-dot');
+    if (triggerDot) triggerDot.className = cls;
+  }
+}
+
+// Called when user clicks a subject in the dropdown list
+let _pendingSubject = null;
+function subjectDropdownSelect(name) {
+  _pendingSubject = name;
+  document.getElementById('subj-trigger-text').textContent = name;
+  document.getElementById('subj-trigger-dot').className = `sdot sdot-${getStatusClass(name)}`;
+  // Highlight selected item
+  document.querySelectorAll('.subj-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.name === name);
+  });
+  closeSubjectDropdown();
+  document.getElementById('load-btn').disabled = false;
+}
+
+function closeSubjectDropdown() {
+  document.getElementById('subj-list').classList.add('hidden');
+  document.getElementById('subj-trigger').classList.remove('open');
+}
+
+// Module-level reference so reviewer-change handler can call it
+let _refreshSubjectsAndStatus = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ranking
@@ -1457,6 +1551,12 @@ function initRanking() {
       stat.textContent = 'Phase 1 submitted — see plan details...';
       stat.style.color = 'var(--green)';
       btn.disabled = true;
+      // Mark phase 1 complete in local status cache and refresh dot
+      S.rankingStatus[S.currentSubject] = {
+        ...(S.rankingStatus[S.currentSubject] || {}),
+        phase1: true,
+      };
+      updateSubjectStatus(S.currentSubject);
     } catch (e) {
       const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
       const a = Object.assign(document.createElement('a'), {
@@ -1578,11 +1678,21 @@ function openRerankDialog(resultBase, phase1Rankings, statEl) {
   rerankSels.forEach(s => s.addEventListener('change', validateRerank));
   validateRerank();
 
-  // Skip: keep only phase 1, close dialog
-  skipBtn.onclick = () => {
+  // Skip: phase 1 is already saved; save a phase2_skipped marker so reload
+  // shows green (both phases complete) rather than orange (phase 1 only).
+  skipBtn.onclick = async () => {
     modal.classList.add('hidden');
     statEl.textContent = 'Ranking submitted (no revision).';
     statEl.style.color = 'var(--green)';
+    try {
+      await DataLoader.saveRanking({
+        ...resultBase,
+        phase2_skipped: true,
+        timestamp_phase2: new Date().toISOString(),
+      });
+    } catch (e) { console.warn('Could not save phase2 skip marker:', e); }
+    S.rankingStatus[S.currentSubject] = { phase1: true, phase2: true };
+    updateSubjectStatus(S.currentSubject);
   };
 
   // Submit phase 2
@@ -1609,6 +1719,9 @@ function openRerankDialog(resultBase, phase1Rankings, statEl) {
       await DataLoader.saveRanking(finalResult);
       statEl.textContent = changed ? 'Revised ranking submitted.' : 'Ranking confirmed (no change).';
       statEl.style.color = 'var(--green)';
+      // Mark both phases complete in local cache and refresh dot
+      S.rankingStatus[S.currentSubject] = { phase1: true, phase2: true };
+      updateSubjectStatus(S.currentSubject);
     } catch (e) {
       statEl.textContent = 'Save failed — see console.';
       statEl.style.color = 'var(--red)';
@@ -1893,6 +2006,11 @@ async function initNavigation() {
     reviewerLocked.textContent = name || '—';
     // Trigger change event so ranking validation re-runs
     document.getElementById('reviewer-select').dispatchEvent(new Event('change'));
+    // If a site is already selected, refresh subject status for the new reviewer
+    const currentSite = siteSel.value;
+    if (currentSite && _refreshSubjectsAndStatus) {
+      _refreshSubjectsAndStatus(currentSite);
+    }
   }
 
   revGate.addEventListener('change', () => {
@@ -1920,6 +2038,58 @@ async function initNavigation() {
     S.currentSubject = '';
   });
 
+  // ── Custom subject dropdown toggle ──────────────────────────────────────
+  const subjTrigger = document.getElementById('subj-trigger');
+  const subjList    = document.getElementById('subj-list');
+
+  subjTrigger.addEventListener('click', () => {
+    if (subjTrigger.disabled) return;
+    const isOpen = !subjList.classList.contains('hidden');
+    if (isOpen) {
+      closeSubjectDropdown();
+    } else {
+      subjList.classList.remove('hidden');
+      subjTrigger.classList.add('open');
+    }
+  });
+
+  // Close on outside click
+  document.addEventListener('click', e => {
+    if (!document.getElementById('subj-dropdown').contains(e.target)) {
+      closeSubjectDropdown();
+    }
+  });
+
+  // ── Refresh subjects + ranking status for a site/reviewer combo ──────────
+  async function refreshSubjectsAndStatus(site) {
+    subjTrigger.disabled = true;
+    loadBtn.disabled = true;
+    _pendingSubject = null;
+    document.getElementById('subj-trigger-text').textContent = '—';
+    document.getElementById('subj-trigger-dot').className = 'sdot sdot-none';
+    S.currentSubjects = [];
+    S.rankingStatus = {};
+    renderSubjectDropdown();
+
+    if (!site) return;
+
+    const reviewer = document.getElementById('reviewer-select').value;
+    const [subjects, status] = await Promise.all([
+      DataLoader.loadSubjects(site),
+      DataLoader.loadRankingStatus(site, reviewer),
+    ]);
+
+    S.currentSubjects = subjects;
+    S.rankingStatus = status || {};
+    renderSubjectDropdown();
+    if (subjects.length > 0) subjTrigger.disabled = false;
+
+    await DataLoader.loadSiteConfig(site);
+  }
+
+  // Expose so reviewer-change handler can call it
+  _refreshSubjectsAndStatus = refreshSubjectsAndStatus;
+
   // Load sites
   const sites = await DataLoader.loadSites();
   sites.forEach(site => {
@@ -1929,38 +2099,13 @@ async function initNavigation() {
     siteSel.appendChild(opt);
   });
 
-  // Site change -> load subjects
-  siteSel.addEventListener('change', async () => {
-    subjSel.innerHTML = '<option value="">—</option>';
-    subjSel.disabled = true;
-    loadBtn.disabled = true;
-
-    const site = siteSel.value;
-    if (!site) return;
-
-    const subjects = await DataLoader.loadSubjects(site);
-    subjects.forEach(subj => {
-      const opt = document.createElement('option');
-      opt.value = subj.name;
-      opt.textContent = subj.name + (subj.status === 'processed' ? '' : ' (not processed)');
-      opt.disabled = subj.status !== 'processed';
-      subjSel.appendChild(opt);
-    });
-    subjSel.disabled = false;
-
-    // Load site config (if needed for other settings)
-    await DataLoader.loadSiteConfig(site);
-  });
-
-  // Subject change -> enable load
-  subjSel.addEventListener('change', () => {
-    loadBtn.disabled = !subjSel.value;
-  });
+  // Site change -> refresh subjects + status
+  siteSel.addEventListener('change', () => refreshSubjectsAndStatus(siteSel.value));
 
   // Load button
   loadBtn.addEventListener('click', async () => {
     const site = siteSel.value;
-    const subject = subjSel.value;
+    const subject = _pendingSubject;
     if (!site || !subject) return;
 
     S.currentSite = site;
@@ -1980,6 +2125,11 @@ async function initNavigation() {
 
       // Update UI
       document.getElementById('case-label').textContent = `${site} / ${subject}`;
+      // Sync dropdown selection highlight and trigger dot
+      document.querySelectorAll('.subj-item').forEach(el => {
+        el.classList.toggle('selected', el.dataset.name === subject);
+      });
+      updateSubjectStatus(subject);
 
       // Display prescription dose
       const rxLabel = document.getElementById('rx-label');

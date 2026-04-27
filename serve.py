@@ -68,6 +68,10 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             subject = params.get('subject', [''])[0]
             reviewer = params.get('reviewer', [''])[0]
             self._handle_get_ranking(site, subject, reviewer)
+        elif path == '/api/ranking-status':
+            site = params.get('site', [''])[0]
+            reviewer = params.get('reviewer', [''])[0]
+            self._handle_ranking_status(site, reviewer)
         else:
             super().do_GET()
 
@@ -176,6 +180,41 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({'exists': True, 'ranking': data})
         else:
             self._json_response({'exists': False})
+
+    def _handle_ranking_status(self, site, reviewer):
+        """Return per-subject phase completion status for a reviewer at a site.
+
+        Response: { "SUBJ001": { "phase1": true, "phase2": true }, ... }
+        phase2 is true if rankings_phase2 is present OR phase2_skipped is true.
+        """
+        if not site or not reviewer:
+            self._json_response({})
+            return
+
+        RANKINGS_DIR.mkdir(parents=True, exist_ok=True)
+        status = {}
+
+        # Read all ranking files and match by JSON content (avoids filename
+        # parsing ambiguity when site/subject/reviewer names contain spaces)
+        for filepath in RANKINGS_DIR.glob('*.json'):
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if data.get('site') != site or data.get('reviewer') != reviewer:
+                    continue
+                subject = data.get('subject', '')
+                if not subject:
+                    continue
+                has_phase1 = bool(data.get('rankings_phase1'))
+                has_phase2 = (
+                    bool(data.get('rankings_phase2')) or
+                    bool(data.get('phase2_skipped'))
+                )
+                status[subject] = {'phase1': has_phase1, 'phase2': has_phase2}
+            except Exception:
+                pass
+
+        self._json_response(status)
 
     def _handle_save_ranking(self):
         content_len = int(self.headers.get('Content-Length', 0))

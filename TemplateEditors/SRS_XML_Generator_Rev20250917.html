@@ -1,0 +1,1573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stereotactic Template Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .modal { backdrop-filter: blur(5px); background-color: rgba(0, 0, 0, 0.5); }
+        .input-group { position: relative; }
+        .input-group input[type="number"]::-webkit-inner-spin-button, 
+        .input-group input[type="number"]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+        .input-group input[type="number"] { -moz-appearance: textfield; }
+        .input-unit { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #6b7280; font-size: 0.875rem; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-3xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
+        <header class="bg-blue-800 text-white p-6">
+            <h1 class="text-2xl font-bold">Stereotactic Template Generator</h1>
+            <p class="text-sm font-light mt-1 opacity-80">Quickly create an XML template for intracranial SRS treatments.</p>
+        </header>
+
+        <main class="p-6 md:p-8 space-y-8">
+            <!-- Project Details -->
+            <div class="space-y-4">
+                <div>
+                    <label for="templateName" class="block text-sm font-medium text-gray-700">Template Name</label>
+                    <input type="text" id="templateName" value="New SRS Template" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label for="numGTVs" class="block text-sm font-medium text-gray-700">Number of GTVs</label>
+                        <input type="number" id="numGTVs" min="1" max="50" value="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                    </div>
+                    <div>
+                        <label for="numFractions" class="block text-sm font-medium text-gray-700">Number of Fractions</label>
+                        <input type="number" id="numFractions" min="1" max="50" value="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Global Dose Setter -->
+            <div class="pt-4 border-t border-gray-200">
+                <label for="globalDose" class="block text-sm font-medium text-gray-700">Set Dose for All Targets</label>
+                <div class="input-group mt-1">
+                    <input type="number" id="globalDose" min="0" step="0.1" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200" placeholder="e.g., 20">
+                    <span class="input-unit">Gy</span>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">This will update the dose for all GTVs below.</p>
+            </div>
+
+            <!-- Optimization Objectives -->
+            <div class="space-y-4 pt-4 border-t border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-800">Optimization Objectives</h2>
+                
+                <!-- GTV Objective -->
+                <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
+                    <h3 class="font-medium text-gray-800">GTV Objective</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label for="gtvObjectiveType" class="block text-sm font-medium text-gray-700">Type</label>
+                            <select id="gtvObjectiveType" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                <option value="DoseVolume" selected>DoseVolume (Dxx%)</option>
+                                <option value="VolumeDose">VolumeDose (Vxx%)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label id="gtvThresholdLabel" for="gtvThreshold" class="block text-sm font-medium text-gray-700">Threshold (Volume %)</label>
+                            <input type="number" id="gtvThreshold" value="99" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label id="gtvGoalLabel" for="gtvGoal" class="block text-sm font-medium text-gray-700">Goal (Dose %)</label>
+                            <div class="input-group">
+                                <input type="number" id="gtvGoal" value="115" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                <span class="input-unit">%</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="gtvVariation" class="block text-sm font-medium text-gray-700">Acceptable Variation</label>
+                             <div class="input-group">
+                                <input type="number" id="gtvVariation" value="110" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                <span class="input-unit">%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            
+                <!-- PTV Objectives -->
+                <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
+                    <h3 class="font-medium text-gray-800">PTV Coverage Objective</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label for="ptvObjectiveType" class="block text-sm font-medium text-gray-700">Type</label>
+                            <select id="ptvObjectiveType" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                <option value="VolumeDose" selected>VolumeDose (Vxx%)</option>
+                                <option value="DoseVolume">DoseVolume (Dxx%)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label id="ptvThresholdLabel" for="ptvThreshold" class="block text-sm font-medium text-gray-700">Threshold (Dose %)</label>
+                            <input type="number" id="ptvThreshold" value="100" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label id="ptvGoalLabel" for="ptvGoal" class="block text-sm font-medium text-gray-700">Goal (Volume %)</label>
+                            <div class="input-group">
+                                <input type="number" id="ptvGoal" value="100" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                 <span class="input-unit">%</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="ptvVariation" class="block text-sm font-medium text-gray-700">Acceptable Variation</label>
+                            <div class="input-group">
+                                <input type="number" id="ptvVariation" value="98" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                <span class="input-unit">%</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="pt-3 mt-3 border-t border-gray-200">
+                        <h4 class="font-medium text-gray-800">PTV Hotspot Objective (D0.03cm³)</h4>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                             <div>
+                                <label for="ptvHotspotGoal" class="block text-sm font-medium text-gray-700">Primary Goal (Dose %)</label>
+                                <div class="input-group">
+                                    <input type="number" id="ptvHotspotGoal" value="140" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                    <span class="input-unit">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="ptvHotspotVariation" class="block text-sm font-medium text-gray-700">Acceptable Variation (Dose %)</label>
+                                <div class="input-group">
+                                    <input type="number" id="ptvHotspotVariation" value="150" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200">
+                                    <span class="input-unit">%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GTV Details -->
+            <div id="gtvContainer" class="space-y-4">
+                <!-- Dynamic GTV fields will be injected here -->
+            </div>
+            
+            <!-- Ring Objectives Checkbox -->
+            <div class="space-y-4 pt-4 border-t border-gray-200">
+                 <div class="relative flex items-start">
+                    <div class="flex h-6 items-center">
+                      <input id="addRingsCheckbox" name="add-rings" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600" checked>
+                    </div>
+                    <div class="ml-3 text-sm leading-6">
+                      <label for="addRingsCheckbox" class="font-medium text-gray-900">Add Ring Objectives?</label>
+                      <p class="text-gray-500">Include optimization objectives for the NS_Ring structures.</p>
+                    </div>
+                  </div>
+            </div>
+
+            <button id="saveBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md">
+                Generate and Save XML
+            </button>
+        </main>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="saveModal" class="modal fixed inset-0 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm text-center transform transition-all duration-300 scale-95 opacity-0">
+            <h3 class="text-xl font-semibold text-gray-800 mb-2">Save Template</h3>
+            <p class="text-gray-600 text-sm mb-4">Please provide a file name for your XML template.</p>
+            <form id="saveForm" class="space-y-4">
+                <div>
+                    <label for="fileNameInput" class="sr-only">File Name</label>
+                    <input type="text" id="fileNameInput" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                </div>
+                <div class="flex justify-end space-x-2">
+                    <button type="button" onclick="closeModal('saveModal')" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+                        Cancel
+                    </button>
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                        Save
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Message Modal -->
+    <div id="messageModal" class="modal fixed inset-0 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm text-center transform transition-all duration-300 scale-95 opacity-0">
+            <h3 id="modalTitle" class="text-xl font-semibold text-gray-800 mb-2"></h3>
+            <p id="modalMessage" class="text-gray-600 text-sm mb-4"></p>
+            <button onclick="closeModal('messageModal')" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">OK</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const numGTVsInput = document.getElementById('numGTVs');
+            numGTVsInput.addEventListener('input', generateGTVFields);
+            document.getElementById('globalDose').addEventListener('input', applyGlobalDose);
+            document.getElementById('saveBtn').addEventListener('click', showSaveModal);
+            document.getElementById('saveForm').addEventListener('submit', handleSaveFormSubmit);
+            document.getElementById('gtvObjectiveType').addEventListener('change', () => updateObjectiveLabels('gtv'));
+            document.getElementById('ptvObjectiveType').addEventListener('change', () => updateObjectiveLabels('ptv'));
+            
+            // Initial call to set up the form
+            generateGTVFields();
+            updateObjectiveLabels('gtv');
+            updateObjectiveLabels('ptv');
+        });
+
+        // ===================================
+        // UI & Event Handlers
+        // ===================================
+        function generateGTVFields() {
+            const numGTVs = parseInt(document.getElementById('numGTVs').value, 10);
+            const container = document.getElementById('gtvContainer');
+            const existingGTVs = container.querySelectorAll('[id^="gtvBlock_"]').length;
+            const globalDoseValue = document.getElementById('globalDose')?.value;
+
+            // Add new GTVs if needed
+            if (numGTVs > existingGTVs) {
+                for (let i = existingGTVs + 1; i <= numGTVs; i++) {
+                    const gtvBlock = document.createElement('div');
+                    gtvBlock.id = `gtvBlock_${i}`;
+                    gtvBlock.className = 'bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3';
+                    
+                    const initialDose = (globalDoseValue && !isNaN(parseFloat(globalDoseValue))) ? globalDoseValue : "20";
+
+                    gtvBlock.innerHTML = `
+                        <h3 class="font-semibold text-gray-800">GTV ${i}</h3>
+                        <div>
+                            <label for="gtvIdentifier_${i}" class="block text-xs font-medium text-gray-600">GTV Identifier (e.g., 14, Tumor1)</label>
+                            <input type="text" id="gtvIdentifier_${i}" value="${i}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200" required>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label for="gtvDose_${i}" class="block text-xs font-medium text-gray-600">Total Dose (Gy)</label>
+                                <div class="input-group">
+                                    <input type="number" id="gtvDose_${i}" value="${initialDose}" min="0" step="0.1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200" required>
+                                    <span class="input-unit">Gy</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="gtvMargin_${i}" class="block text-xs font-medium text-gray-600">PTV Margin (mm)</label>
+                                <div class="input-group">
+                                    <input type="number" id="gtvMargin_${i}" value="1" min="0" step="0.1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-200" required>
+                                    <span class="input-unit">mm</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    container.appendChild(gtvBlock);
+                }
+            } 
+            // Remove excess GTVs
+            else if (numGTVs < existingGTVs) {
+                for (let i = existingGTVs; i > numGTVs; i--) {
+                    const gtvBlockToRemove = document.getElementById(`gtvBlock_${i}`);
+                    if (gtvBlockToRemove) {
+                        container.removeChild(gtvBlockToRemove);
+                    }
+                }
+            }
+        }
+
+        function applyGlobalDose() {
+            const globalDoseInput = document.getElementById('globalDose');
+            const globalDoseValue = globalDoseInput.value;
+
+            if (globalDoseValue === '' || isNaN(parseFloat(globalDoseValue))) {
+                return;
+            }
+
+            const numGTVs = parseInt(document.getElementById('numGTVs').value, 10);
+            for (let i = 1; i <= numGTVs; i++) {
+                const doseInput = document.getElementById(`gtvDose_${i}`);
+                if (doseInput) {
+                    doseInput.value = globalDoseValue;
+                }
+            }
+        }
+
+        function updateObjectiveLabels(prefix) {
+            const type = document.getElementById(`${prefix}ObjectiveType`).value;
+            const thresholdLabel = document.getElementById(`${prefix}ThresholdLabel`);
+            const goalLabel = document.getElementById(`${prefix}GoalLabel`);
+
+            if (type === 'DoseVolume') { // Dxx%
+                thresholdLabel.textContent = 'Threshold (Volume %)';
+                goalLabel.textContent = 'Goal (Dose %)';
+            } else { // VolumeDose, Vxx%
+                thresholdLabel.textContent = 'Threshold (Dose %)';
+                goalLabel.textContent = 'Goal (Volume %)';
+            }
+        }
+
+        function validateInputs() {
+            const templateName = document.getElementById('templateName').value;
+            const numGTVs = parseInt(document.getElementById('numGTVs').value, 10);
+            const numFractions = parseInt(document.getElementById('numFractions').value, 10);
+
+            if (!templateName || numGTVs < 1) {
+                showModal('messageModal', 'Validation Error', 'Please provide a template name and a valid number of GTVs.');
+                return false;
+            }
+
+            const allowedFractions = [1, 3, 5];
+            if (!allowedFractions.includes(numFractions)) {
+                showModal('messageModal', 'Validation Error', `Invalid number of fractions. Allowed values are: ${allowedFractions.join(', ')}.`);
+                return false;
+            }
+
+            const allowedMargins = [0, 1, 2];
+            for (let i = 1; i <= numGTVs; i++) {
+                const marginInput = document.getElementById(`gtvMargin_${i}`);
+                if (marginInput) {
+                    const margin = parseFloat(marginInput.value);
+                    if (!allowedMargins.includes(margin)) {
+                        showModal('messageModal', 'Validation Error', `Invalid PTV margin for GTV ${i}. Allowed values are: ${allowedMargins.join(', ')} mm.`);
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+        
+        function showModal(id, title, message) {
+            const modal = document.getElementById(id);
+            if (id === 'messageModal') {
+                document.getElementById('modalTitle').textContent = title;
+                document.getElementById('modalMessage').textContent = message;
+            }
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                modal.querySelector('div').classList.remove('scale-95', 'opacity-0');
+                modal.querySelector('div').classList.add('scale-100', 'opacity-100');
+            }, 10);
+        }
+
+        function closeModal(id) {
+            const modal = document.getElementById(id);
+            modal.querySelector('div').classList.remove('scale-100', 'opacity-100');
+            modal.querySelector('div').classList.add('scale-95', 'opacity-0');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+            }, 300);
+        }
+
+        function showSaveModal() {
+            if (!validateInputs()) {
+                return;
+            }
+            
+            const templateName = document.getElementById('templateName').value;
+            // Pre-fill filename with a sanitized version of the template name
+            const sanitizedName = templateName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            document.getElementById('fileNameInput').value = sanitizedName;
+            
+            showModal('saveModal');
+        }
+
+        function handleSaveFormSubmit(event) {
+            event.preventDefault();
+
+            if (!validateInputs()) {
+                closeModal('saveModal');
+                return;
+            }
+
+            const fileName = document.getElementById('fileNameInput').value;
+
+            const templateName = document.getElementById('templateName').value;
+            const numGTVs = parseInt(document.getElementById('numGTVs').value, 10);
+            const numFractions = parseInt(document.getElementById('numFractions').value, 10);
+            
+            const gtvData = [];
+            for (let i = 1; i <= numGTVs; i++) {
+                const identifierInput = document.getElementById(`gtvIdentifier_${i}`);
+                const doseInput = document.getElementById(`gtvDose_${i}`);
+                const marginInput = document.getElementById(`gtvMargin_${i}`);
+                if (!doseInput || !marginInput || !identifierInput || !identifierInput.value) {
+                    showModal('messageModal', 'Validation Error', `Missing data for GTV ${i}. Please fill in all fields.`);
+                    closeModal('saveModal');
+                    return;
+                }
+                gtvData.push({
+                    identifier: identifierInput.value,
+                    dose: parseFloat(doseInput.value),
+                    margin: parseFloat(marginInput.value)
+                });
+            }
+
+            try {
+                const xmlDoc = createXMLDocument(templateName, gtvData, numFractions);
+                const xmlString = serializeXML(xmlDoc);
+                downloadXMLFile(xmlString, fileName);
+                closeModal('saveModal');
+                showModal('messageModal', 'Success!', `Template "${fileName}.xml" saved successfully.`);
+            } catch (error) {
+                console.error("Error creating or saving XML:", error);
+                closeModal('saveModal');
+                showModal('messageModal', 'Error', 'An error occurred while generating the XML template. Please check the console for details.');
+            }
+        }
+
+        const oarCodes = [
+            { id: 'OAR1', name: 'Bones', code: '5018', schema: 'FMA', meaning: 'Bones', color: 4284623308, version: '3.2' },
+            { id: 'OAR2', name: 'Spinal canal', code: '9680', schema: 'FMA', meaning: 'Spinal canal', color: 4291570027, version: '3.2' },
+            { id: 'OAR3', name: 'Eyeball right', code: '12514', schema: 'FMA', meaning: 'Eyeball right', color: 4280907468, version: '3.2' },
+            { id: 'OAR4', name: 'Eyeball left', code: '12515', schema: 'FMA', meaning: 'Eyeball left', color: 4291586345, version: '3.2' },
+            { id: 'OAR5', name: 'Brain', code: '50801', schema: 'FMA', meaning: 'Brain', color: 4284950988, version: '3.2' },
+            { id: 'OAR6', name: 'Optic nerve right', code: '50875', schema: 'FMA', meaning: 'Right optic nerve', color: 4280929332, version: '3.2' },
+            { id: 'OAR7', name: 'Optic nerve left', code: '50878', schema: 'FMA', meaning: 'Optic nerve left', color: 4289776681, version: '3.2' },
+            { id: 'OAR8', name: 'Lens right', code: '58242', schema: 'FMA', meaning: 'Lens right', color: 4280929458, version: '3.2' },
+            { id: 'OAR9', name: 'Lens left', code: '58243', schema: 'FMA', meaning: 'Lens left', color: 4291570052, version: '3.2' },
+            { id: 'OAR10', name: 'Optic chiasm', code: '62045', schema: 'FMA', meaning: 'Optic chiasm', color: 4291605289, version: '3.2' },
+            { id: 'OAR11', name: 'Brainstem', code: '79876', schema: 'FMA', meaning: 'Brainstem', color: 4291570011, version: '3.2' },
+            { id: 'OAR12', name: 'Cochlea left', code: '60203', schema: 'FMA', meaning: 'Cochlea', color: 4288000999, version: '3.2' },
+            { id: 'OAR13', name: 'Cochlea right', code: '60202', schema: 'FMA', meaning: 'Cochlea', color: 4288000999, version: '3.2' }
+        ];
+
+        // ===================================
+        // XML Generation Logic
+        // ===================================
+        function createXMLDocument(templateName, gtvData, numFractions) {
+            const addRingsObjectives = document.getElementById('addRingsCheckbox').checked;
+            const doc = document.implementation.createDocument(null, 'TreatmentInstruction');
+            const root = doc.documentElement;
+
+            // Get objective customization values from the form
+            const gtvObjectiveType = document.getElementById('gtvObjectiveType').value;
+            const gtvThreshold = document.getElementById('gtvThreshold').value;
+            const gtvGoal = document.getElementById('gtvGoal').value;
+            const gtvVariation = document.getElementById('gtvVariation').value;
+
+            const ptvObjectiveType = document.getElementById('ptvObjectiveType').value;
+            const ptvThreshold = document.getElementById('ptvThreshold').value;
+            const ptvGoal = document.getElementById('ptvGoal').value;
+            const ptvVariation = document.getElementById('ptvVariation').value;
+
+            const ptvHotspotGoal = document.getElementById('ptvHotspotGoal').value;
+            const ptvHotspotVariation = document.getElementById('ptvHotspotVariation').value;
+            
+            // Define classification codes for common structures
+            const gtvCode = { Code: 'R-429E0', Schema: 'SRT', Meaning: 'Gross tumor volume', SchemaVersion: '' };
+            const ptvCode = { Code: 'R-429EC', Schema: 'SRT', Meaning: 'Planning target volume', SchemaVersion: '' };
+            const normalTissueCode = { Code: 'NormalTissue', Schema: '99VMS_STRUCTCODE', Meaning: 'Unidentified structure', SchemaVersion: '1.0' };
+            const controlRegionCode = { Code: 'ControlRegion', Schema: '99VMS_STRUCTCODE', Meaning: 'Unspecified control region', SchemaVersion: '1.0' };
+            const bodyCode = { Code: 'BODY', Schema: '99VMS_STRUCTCODE', Meaning: 'Body plus other external items', SchemaVersion: '1.0' };
+            const nsGtvCode = { Code: 'R-429E0', Schema: 'SRT', Meaning: 'Gross tumor volume', SchemaVersion: '' };
+            const nsPtvCode = { Code: 'R-429EC', Schema: 'SRT', Meaning: 'Planning target volume', SchemaVersion: '' };
+            const healthyTissueCode = { Code: 'HealthyTissue', Schema: '99VMS_STRUCTCODE', Meaning: 'Generic healthy tissue', SchemaVersion: '1.0' };
+            const prvCode = { Code: 'PRV', Schema: '99VMS_STRUCTCODE', Meaning: 'Planning organ-at-risk volume', SchemaVersion: '1.0' };
+
+            // Intermediate structures to hold IDs for dose-level grouping
+            const gtvByDose = {};
+            const ptvByDose = {};
+            
+            // Map to store information about derived NS structures
+            const nsStructureInfoByDose = {};
+            
+            // Store data for ring objectives
+            const ringObjectiveData = [];
+            let opticsPrvId;
+            let brainGtvId;
+
+            // Basic metadata
+            createElementWithText(doc, root, 'SchemaVersion', '2.0');
+            createElementWithText(doc, root, 'Identifier', crypto.randomUUID());
+            createElementWithText(doc, root, 'DisplayName', templateName);
+            createElementWithText(doc, root, 'AnatomicalRegion', 'Head and Neck');
+            createElementWithText(doc, root, 'AnatomicalSite', 'Brain');
+            
+            // Structures sections
+            const oarSection = doc.createElement('OARs');
+            oarCodes.forEach(oar => {
+                const code = {
+                    Code: oar.code,
+                    Schema: oar.schema,
+                    SchemaVersion: oar.version,
+                    Meaning: oar.meaning
+                };
+                addStructure(doc, oarSection, oar.id, oar.name, code, oar.color);
+            });
+            
+            const targetSection = doc.createElement('Targets');
+            const controlSection = doc.createElement('ControlRegions');
+            
+            let targetCounter = 1;
+            
+            // Collect GTV and PTV data
+            gtvData.forEach((gtv, index) => {
+                const dose = gtv.dose.toFixed(0);
+                if (!gtvByDose[dose]) gtvByDose[dose] = [];
+                if (!ptvByDose[dose]) ptvByDose[dose] = [];
+                
+                const gtvId = `Target${targetCounter++}`;
+                const ptvId = `Target${targetCounter++}`;
+                
+                const gtvName = `GTV${gtv.identifier}`;
+                const ptvName = `PTV${gtv.identifier}`;
+
+                gtvByDose[dose].push({ id: gtvId, margin: gtv.margin, name: gtvName });
+                ptvByDose[dose].push({ id: ptvId, name: ptvName });
+            });
+
+            // Create individual and derived structures
+            Object.keys(gtvByDose).forEach(doseGy => {
+                const doseInt = parseFloat(doseGy).toFixed(0);
+                
+                // Create individual GTVs and PTVs for this dose level
+                gtvByDose[doseGy].forEach(gtvInfo => {
+                    addStructure(doc, targetSection, gtvInfo.id, gtvInfo.name, gtvCode, 4280900300);
+                });
+
+                ptvByDose[doseGy].forEach((ptvInfo, index) => {
+                    const gtvInfo = gtvByDose[doseGy][index];
+                    const ptvProtocol = createMarginProtocol(doc, gtvInfo.id, gtvCode, gtvInfo.margin);
+                    addStructure(doc, targetSection, ptvInfo.id, ptvInfo.name, ptvCode, 4294901760, ptvProtocol);
+                });
+
+                // Create NS_GTV and NS_PTV
+                let nsGtvProtocol, nsPtvProtocol;
+                const gtvIdsForDose = gtvByDose[doseGy].map(g => g.id);
+                const ptvIdsForDose = ptvByDose[doseGy].map(p => p.id);
+
+                if (gtvIdsForDose.length > 1) {
+                    nsGtvProtocol = createUnionProtocol(doc, gtvIdsForDose, gtvCode);
+                    nsPtvProtocol = createUnionProtocol(doc, ptvIdsForDose, ptvCode);
+                } else {
+                    nsGtvProtocol = createIdentityProtocol(doc, gtvIdsForDose[0], gtvCode);
+                    nsPtvProtocol = createIdentityProtocol(doc, ptvIdsForDose[0], ptvCode);
+                }
+
+                const nsGtvId = `Target${targetCounter++}`;
+                const nsPtvId = `Target${targetCounter++}`;
+                addStructure(doc, targetSection, nsGtvId, `NS_GTV_${doseInt}`, nsGtvCode, 4280900300, nsGtvProtocol);
+                addStructure(doc, targetSection, nsPtvId, `NS_PTV_${doseInt}`, nsPtvCode, 4294901760, nsPtvProtocol);
+
+                // Store NS structure info for later reference
+                nsStructureInfoByDose[doseGy] = {
+                    nsGtvId,
+                    nsPtvId,
+                    nsGtvCode,
+                    nsPtvCode
+                };
+            });
+            
+            let controlCounter = 1;
+
+            // Create Brain-GTV structure
+            const allNsGtvInfos = Object.values(nsStructureInfoByDose);
+            const brainGtvProtocol = createBrainGtvProtocol(doc, allNsGtvInfos);
+            brainGtvId = `Control${controlCounter++}`;
+            addStructure(doc, controlSection, brainGtvId, 'Brain-GTV', healthyTissueCode, 4280929353, brainGtvProtocol);
+
+            // Create Optics_PRV01 structure
+            opticsPrvId = `Control${controlCounter++}`;
+            const opticsPrvProtocol = createOpticsPrvProtocol(doc);
+            addStructure(doc, controlSection, opticsPrvId, 'Optics_PRV01', prvCode, 4280891084, opticsPrvProtocol);
+
+            // Create derived control structures (e.g., rings)
+            Object.keys(nsStructureInfoByDose).forEach(doseGy => {
+                const doseInt = parseFloat(doseGy).toFixed(0);
+
+                // Ring 1: NS_Ring_05_XX
+                const ringId05 = `Control${controlCounter++}`;
+                const ringName05 = `NS_Ring_05_${doseInt}`;
+                const ringColor05 = 4294944000; // Yellow-ish
+                const ringProtocol05 = createComplexSubtractionRingProtocol(doc, nsStructureInfoByDose, doseGy, 0, 5, 5, 'Body');
+                addStructure(doc, controlSection, ringId05, ringName05, normalTissueCode, ringColor05, ringProtocol05);
+                ringObjectiveData.push({ id: ringId05, doseGy: doseGy, type: 'Ring05' });
+
+                // Ring 2: NS_Ring_10_XX
+                const ringId10 = `Control${controlCounter++}`;
+                const ringName10 = `NS_Ring_10_${doseInt}`;
+                const ringColor10 = 4294924288; // Orange-ish
+                const ringProtocol10 = createComplexSubtractionRingProtocol(doc, nsStructureInfoByDose, doseGy, -5, 20, 20, 'Body');
+                addStructure(doc, controlSection, ringId10, ringName10, normalTissueCode, ringColor10, ringProtocol10);
+                ringObjectiveData.push({ id: ringId10, doseGy: doseGy, type: 'Ring10' });
+
+                // Ring 3: NS_Ring_20_XX
+                const ringId20 = `Control${controlCounter++}`;
+                const ringName20 = `NS_Ring_20_${doseInt}`;
+                const ringColor20 = 4286578688; // Green-ish
+                const ringProtocol20 = createComplexSubtractionRingProtocol(doc, nsStructureInfoByDose, doseGy, -20, 40, 40, 'Brain');
+                addStructure(doc, controlSection, ringId20, ringName20, normalTissueCode, ringColor20, ringProtocol20);
+                ringObjectiveData.push({ id: ringId20, doseGy: doseGy, type: 'Ring20' });
+            });
+            
+            // Add OARs and Targets to root
+            root.appendChild(oarSection);
+            root.appendChild(targetSection);
+
+            // Control regions will be added later
+            root.appendChild(controlSection);
+            
+            // Phases and Objectives
+            const phases = doc.createElement('Phases');
+            const phase = doc.createElement('Phase');
+            phase.setAttribute('Id', '1');
+            phase.setAttribute('Adaptive', 'false');
+            phase.setAttribute('Bolus', 'false');
+            phase.setAttribute('Stereotactic', 'true');
+            phases.appendChild(phase);
+            
+            const treatmentFrequency = doc.createElement('TreatmentFrequency');
+            treatmentFrequency.appendChild(doc.createElement('OneSessionPerDay'));
+            phase.appendChild(treatmentFrequency);
+
+            let priority1Counter = 1;
+            let priority2Counter = 1;
+            let priority3Counter = 1;
+
+            const oarObjectives = doc.createElement('PhaseOARObjectives');
+
+            // Add high-priority OAR objectives first
+            const brainstemDoses = { 1: 15.0, 3: 23.1, 5: 31.0 };
+            const opticsPrvDoses = { 1: 10.0, 3: 17.4, 5: 25.0 };
+            const brainstemDose = brainstemDoses[numFractions];
+            const opticsPrvDose = opticsPrvDoses[numFractions];
+
+            // Brainstem Objective
+            if (brainstemDose) {
+                const objective = doc.createElement('Objective');
+                createElementWithText(doc, objective, 'StructureId', 'OAR11'); // Brainstem ID
+                const clinicalGoal = doc.createElement('ClinicalGoal');
+                createElementWithText(doc, clinicalGoal, 'Type', 'DoseVolume');
+                createElementWithText(doc, clinicalGoal, 'Qualifier', 'ShouldBeLessOrEqual');
+                const volume = doc.createElement('Volume');
+                createElementWithText(doc, volume, 'Value', '0.03');
+                createElementWithText(doc, volume, 'Unit', 'Absolute');
+                clinicalGoal.appendChild(volume);
+                const dose = doc.createElement('Dose');
+                createElementWithText(doc, dose, 'Value', brainstemDose.toFixed(4));
+                createElementWithText(doc, dose, 'Unit', 'Absolute');
+                clinicalGoal.appendChild(dose);
+                objective.appendChild(clinicalGoal);
+                
+                createElementWithText(doc, objective, 'Priority', '1');
+                createElementWithText(doc, objective, 'PriorityWithinGroup', priority1Counter++);
+                oarObjectives.appendChild(objective);
+            }
+
+            // Optics_PRV01 Objective
+            if (opticsPrvDose) {
+                const objective = doc.createElement('Objective');
+                createElementWithText(doc, objective, 'StructureId', opticsPrvId);
+                const clinicalGoal = doc.createElement('ClinicalGoal');
+                createElementWithText(doc, clinicalGoal, 'Type', 'DoseVolume');
+                createElementWithText(doc, clinicalGoal, 'Qualifier', 'ShouldBeLessOrEqual');
+                const volume = doc.createElement('Volume');
+                createElementWithText(doc, volume, 'Value', '0.03');
+                createElementWithText(doc, volume, 'Unit', 'Absolute');
+                clinicalGoal.appendChild(volume);
+                const dose = doc.createElement('Dose');
+                createElementWithText(doc, dose, 'Value', opticsPrvDose.toFixed(4));
+                createElementWithText(doc, dose, 'Unit', 'Absolute');
+                clinicalGoal.appendChild(dose);
+                objective.appendChild(clinicalGoal);
+
+                createElementWithText(doc, objective, 'Priority', '1');
+                createElementWithText(doc, objective, 'PriorityWithinGroup', priority1Counter++);
+                oarObjectives.appendChild(objective);
+            }
+            
+            if (addRingsObjectives) {
+                // Add Priority 2 objectives for NS_Ring_10_XX first to give them highest priority in the group
+                const ring10Objectives = ringObjectiveData.filter(r => r.type === 'Ring10');
+                ring10Objectives.forEach(ring => {
+                    const gtvDose = gtvData.find(g => g.dose.toFixed(0) === parseFloat(ring.doseGy).toFixed(0)).dose;
+
+                    const objective = doc.createElement('Objective');
+                    createElementWithText(doc, objective, 'StructureId', ring.id);
+
+                    // Clinical Goal: D0.03cm3 < 50%
+                    const clinicalGoal = doc.createElement('ClinicalGoal');
+                    createElementWithText(doc, clinicalGoal, 'Type', 'DoseVolume');
+                    createElementWithText(doc, clinicalGoal, 'Qualifier', 'ShouldBeLessOrEqual');
+                    const volume = doc.createElement('Volume');
+                    createElementWithText(doc, volume, 'Value', '0.03');
+                    createElementWithText(doc, volume, 'Unit', 'Absolute');
+                    clinicalGoal.appendChild(volume);
+                    const dose = doc.createElement('Dose');
+                    createElementWithText(doc, dose, 'Value', (gtvDose * 0.50).toFixed(4));
+                    createElementWithText(doc, dose, 'Unit', 'Absolute');
+                    clinicalGoal.appendChild(dose);
+                    objective.appendChild(clinicalGoal);
+
+                    // Acceptable Variation: < 55%
+                    const av = doc.createElement('AcceptableVariation');
+                    createElementWithText(doc, av, 'Type', 'DoseVolume');
+                    createElementWithText(doc, av, 'Qualifier', 'ShouldBeLessOrEqual');
+                    const avVolume = doc.createElement('Volume');
+                    createElementWithText(doc, avVolume, 'Value', '0.03');
+                    createElementWithText(doc, avVolume, 'Unit', 'Absolute');
+                    av.appendChild(avVolume);
+                    const avDose = doc.createElement('Dose');
+                    createElementWithText(doc, avDose, 'Value', (gtvDose * 0.55).toFixed(4));
+                    createElementWithText(doc, avDose, 'Unit', 'Absolute');
+                    av.appendChild(avDose);
+                    objective.appendChild(av);
+
+                    // Priority
+                    createElementWithText(doc, objective, 'Priority', '2');
+                    createElementWithText(doc, objective, 'PriorityWithinGroup', priority2Counter++);
+
+                    oarObjectives.appendChild(objective);
+                });
+
+                // Add Priority 3 objectives for NS_Ring_20_XX
+                const ring20Objectives = ringObjectiveData.filter(r => r.type === 'Ring20');
+                ring20Objectives.forEach(ring => {
+                    const gtvDose = gtvData.find(g => g.dose.toFixed(0) === parseFloat(ring.doseGy).toFixed(0)).dose;
+
+                    const objective = doc.createElement('Objective');
+                    createElementWithText(doc, objective, 'StructureId', ring.id);
+
+                    // Clinical Goal: D0.03cm3 < 25%
+                    const clinicalGoal = doc.createElement('ClinicalGoal');
+                    createElementWithText(doc, clinicalGoal, 'Type', 'DoseVolume');
+                    createElementWithText(doc, clinicalGoal, 'Qualifier', 'ShouldBeLessOrEqual');
+                    const volume = doc.createElement('Volume');
+                    createElementWithText(doc, volume, 'Value', '0.03');
+                    createElementWithText(doc, volume, 'Unit', 'Absolute');
+                    clinicalGoal.appendChild(volume);
+                    const dose = doc.createElement('Dose');
+                    createElementWithText(doc, dose, 'Value', (gtvDose * 0.25).toFixed(4));
+                    createElementWithText(doc, dose, 'Unit', 'Absolute');
+                    clinicalGoal.appendChild(dose);
+                    objective.appendChild(clinicalGoal);
+
+                    // Acceptable Variation: < 30%
+                    const av = doc.createElement('AcceptableVariation');
+                    createElementWithText(doc, av, 'Type', 'DoseVolume');
+                    createElementWithText(doc, av, 'Qualifier', 'ShouldBeLessOrEqual');
+                    const avVolume = doc.createElement('Volume');
+                    createElementWithText(doc, avVolume, 'Value', '0.03');
+                    createElementWithText(doc, avVolume, 'Unit', 'Absolute');
+                    av.appendChild(avVolume);
+                    const avDose = doc.createElement('Dose');
+                    createElementWithText(doc, avDose, 'Value', (gtvDose * 0.30).toFixed(4));
+                    createElementWithText(doc, avDose, 'Unit', 'Absolute');
+                    av.appendChild(avDose);
+                    objective.appendChild(av);
+
+                    // Priority
+                    createElementWithText(doc, objective, 'Priority', '3');
+                    createElementWithText(doc, objective, 'PriorityWithinGroup', priority3Counter++);
+
+                    oarObjectives.appendChild(objective);
+                });
+            }
+
+            const prescriptionTargets = doc.createElement('PrescriptionTargets');
+            
+            const sortedDoses = Object.keys(gtvByDose).sort((a, b) => b - a);
+
+            // Add PTV Prescription Targets first (for Priority 1 & 2 objectives)
+            sortedDoses.forEach(doseGy => {
+                const targetsForDose = ptvByDose[doseGy];
+                const gtvDose = gtvData.find(g => g.dose.toFixed(0) === parseFloat(doseGy).toFixed(0)).dose;
+                const fractionDoseGy = (gtvDose / numFractions).toFixed(2);
+
+                targetsForDose.forEach(targetInfo => {
+                    const prescription = doc.createElement('PrescriptionTarget');
+                    createElementWithText(doc, prescription, 'StructureId', targetInfo.id);
+                    createElementWithText(doc, prescription, 'FractionDoseGy', fractionDoseGy);
+                    const objectives = doc.createElement('Objectives');
+                    prescription.appendChild(objectives);
+                
+                    // PTV V100% Objective (Priority 1, sequential)
+                    let ptvType, ptvQualifier, ptvVolUnit, ptvVolVal, ptvDoseUnit, ptvDoseVal;
+                    let ptvAvType, ptvAvQualifier, ptvAvVolUnit, ptvAvVolVal, ptvAvDoseUnit, ptvAvDoseVal;
+                    ptvQualifier = 'ShouldBeMoreOrEqual';
+
+                    if (ptvObjectiveType === 'VolumeDose') { // Vxx% >= Y%
+                        ptvType = 'VolumeDose';
+                        ptvVolUnit = 'Relative';
+                        ptvVolVal = ptvGoal;
+                        ptvDoseUnit = 'Relative';
+                        ptvDoseVal = ptvThreshold;
+                    } else { // Dxx% >= Y%
+                        ptvType = 'DoseVolume';
+                        ptvVolUnit = 'Relative';
+                        ptvVolVal = ptvThreshold;
+                        ptvDoseUnit = 'Relative';
+                        ptvDoseVal = ptvGoal;
+                    }
+
+                    // Logic for AV
+                    ptvAvType = ptvType;
+                    ptvAvQualifier = ptvQualifier;
+                    ptvAvVolUnit = ptvVolUnit;
+                    ptvAvDoseUnit = ptvDoseUnit;
+                    if (ptvObjectiveType === 'VolumeDose') {
+                        ptvAvVolVal = ptvVariation;
+                        ptvAvDoseVal = ptvDoseVal;
+                    } else {
+                        ptvAvVolVal = ptvVolVal;
+                        ptvAvDoseVal = ptvVariation;
+                    }
+                    addObjective(doc, objectives, '1', priority1Counter++, ptvType, ptvQualifier, ptvVolUnit, ptvVolVal, ptvDoseUnit, ptvDoseVal, ptvAvType, ptvAvQualifier, ptvAvVolUnit, ptvAvVolVal, ptvAvDoseUnit, ptvAvDoseVal);
+                    
+                    // PTV D0.03cm3 Objective (Priority 2, sequential)
+                    addObjective(doc, objectives, '2', priority2Counter++, 'DoseVolume', 'ShouldBeLessOrEqual', 'Absolute', 0.03, 'Relative', ptvHotspotGoal, 'DoseVolume', 'ShouldBeLessOrEqual', 'Absolute', 0.03, 'Relative', ptvHotspotVariation);
+
+                    prescriptionTargets.appendChild(prescription);
+                });
+            });
+
+            // Add GTV Prescription Targets (for Priority 1 objectives)
+            sortedDoses.forEach(doseGy => {
+                const targetsForDose = gtvByDose[doseGy];
+                const gtvDose = gtvData.find(g => g.dose.toFixed(0) === parseFloat(doseGy).toFixed(0)).dose;
+                const fractionDoseGy = (gtvDose / numFractions).toFixed(2);
+                
+                targetsForDose.forEach(targetInfo => {
+                    const prescription = doc.createElement('PrescriptionTarget');
+                    createElementWithText(doc, prescription, 'StructureId', targetInfo.id);
+                    createElementWithText(doc, prescription, 'FractionDoseGy', fractionDoseGy);
+                    const objectives = doc.createElement('Objectives');
+                    prescription.appendChild(objectives);
+
+                    // GTV D99% Objective (Priority 1, sequential, after PTV V100%)
+                    let gtvType, gtvQualifier, gtvVolUnit, gtvVolVal, gtvDoseUnit, gtvDoseVal;
+                    let gtvAvType, gtvAvQualifier, gtvAvVolUnit, gtvAvVolVal, gtvAvDoseUnit, gtvAvDoseVal;
+                    gtvQualifier = 'ShouldBeMoreOrEqual';
+
+                    if (gtvObjectiveType === 'DoseVolume') { // Dxx% >= Y%
+                        gtvType = 'DoseVolume';
+                        gtvVolUnit = 'Relative';
+                        gtvVolVal = gtvThreshold;
+                        gtvDoseUnit = 'Relative';
+                        gtvDoseVal = gtvGoal;
+                    } else { // Vxx% >= Y%
+                        gtvType = 'VolumeDose';
+                        gtvVolUnit = 'Relative';
+                        gtvVolVal = gtvGoal;
+                        gtvDoseUnit = 'Relative';
+                        gtvDoseVal = gtvThreshold;
+                    }
+
+                    // Logic for AV
+                    gtvAvType = gtvType;
+                    gtvAvQualifier = gtvQualifier;
+                    gtvAvVolUnit = gtvVolUnit;
+                    gtvAvDoseUnit = gtvDoseUnit;
+                    if (gtvObjectiveType === 'DoseVolume') {
+                        gtvAvVolVal = gtvVolVal;
+                        gtvAvDoseVal = gtvVariation;
+                    } else {
+                        gtvAvVolVal = gtvVariation;
+                        gtvAvDoseVal = gtvDoseVal;
+                    }
+                    addObjective(doc, objectives, '1', priority1Counter++, gtvType, gtvQualifier, gtvVolUnit, gtvVolVal, gtvDoseUnit, gtvDoseVal, gtvAvType, gtvAvQualifier, gtvAvVolUnit, gtvAvVolVal, gtvAvDoseUnit, gtvAvDoseVal);
+                    
+                    prescriptionTargets.appendChild(prescription);
+                });
+            });
+
+            // Add NS_GTV and NS_PTV Prescription Targets with no objectives
+            Object.keys(nsStructureInfoByDose).forEach(doseGy => {
+                const { nsGtvId, nsPtvId } = nsStructureInfoByDose[doseGy];
+                const gtvDose = gtvData.find(g => g.dose.toFixed(0) === parseFloat(doseGy).toFixed(0))?.dose;
+                const fractionDoseGy = (gtvDose / numFractions).toFixed(2);
+
+                const nsGtvPrescription = doc.createElement('PrescriptionTarget');
+                createElementWithText(doc, nsGtvPrescription, 'StructureId', nsGtvId);
+                createElementWithText(doc, nsGtvPrescription, 'FractionDoseGy', (gtvDose / numFractions).toFixed(2));
+                nsGtvPrescription.appendChild(doc.createElement('QualityIndices'));
+                nsGtvPrescription.appendChild(doc.createElement('Objectives')); // Empty objectives section
+                prescriptionTargets.appendChild(nsGtvPrescription);
+                
+                const nsPtvPrescription = doc.createElement('PrescriptionTarget');
+                createElementWithText(doc, nsPtvPrescription, 'StructureId', nsPtvId);
+                createElementWithText(doc, nsPtvPrescription, 'FractionDoseGy', (gtvDose / numFractions).toFixed(2));
+                nsPtvPrescription.appendChild(doc.createElement('QualityIndices'));
+                nsPtvPrescription.appendChild(doc.createElement('Objectives')); // Empty objectives section
+                prescriptionTargets.appendChild(nsPtvPrescription);
+            });
+
+            phase.appendChild(prescriptionTargets);
+
+            if (addRingsObjectives) {
+                // Add OAR/Control Region Objectives for Rings
+                const ring05Objectives = ringObjectiveData.filter(r => r.type === 'Ring05');
+
+                ring05Objectives.forEach(ring => {
+                    const gtvDose = gtvData.find(g => g.dose.toFixed(0) === parseFloat(ring.doseGy).toFixed(0)).dose;
+
+                    const objective = doc.createElement('Objective');
+                    
+                    createElementWithText(doc, objective, 'StructureId', ring.id);
+
+                    // Clinical Goal
+                    const clinicalGoal = doc.createElement('ClinicalGoal');
+                    createElementWithText(doc, clinicalGoal, 'Type', 'DoseVolume');
+                    createElementWithText(doc, clinicalGoal, 'Qualifier', 'ShouldBeLessOrEqual');
+                    const volume = doc.createElement('Volume');
+                    createElementWithText(doc, volume, 'Value', '0.03');
+                    createElementWithText(doc, volume, 'Unit', 'Absolute');
+                    clinicalGoal.appendChild(volume);
+                    const dose = doc.createElement('Dose');
+                    createElementWithText(doc, dose, 'Value', gtvDose.toFixed(4));
+                    createElementWithText(doc, dose, 'Unit', 'Absolute');
+                    clinicalGoal.appendChild(dose);
+                    objective.appendChild(clinicalGoal);
+
+                    // Acceptable Variation
+                    const av = doc.createElement('AcceptableVariation');
+                    createElementWithText(doc, av, 'Type', 'DoseVolume');
+                    createElementWithText(doc, av, 'Qualifier', 'ShouldBeLessOrEqual');
+                    const avVolume = doc.createElement('Volume');
+                    createElementWithText(doc, avVolume, 'Value', '0.03');
+                    createElementWithText(doc, avVolume, 'Unit', 'Absolute');
+                    av.appendChild(avVolume);
+                    const avDose = doc.createElement('Dose');
+                    createElementWithText(doc, avDose, 'Value', (gtvDose * 1.02).toFixed(4));
+                    createElementWithText(doc, avDose, 'Unit', 'Absolute');
+                    av.appendChild(avDose);
+                    objective.appendChild(av);
+
+                    // Priority
+                    createElementWithText(doc, objective, 'Priority', '1');
+                    createElementWithText(doc, objective, 'PriorityWithinGroup', priority1Counter++);
+
+                    oarObjectives.appendChild(objective);
+                });
+            }
+            
+            // Add Priority 3 objective for Brain-GTV
+            const brainGtvObjectives = {
+                1: { dose: 12.0, volume: 10.0, variation: 12.0 },
+                3: { dose: 24.0, volume: 12.0, variation: 16.0 },
+                5: { dose: 30.0, volume: 10.0, variation: 16.0 }
+            };
+            const brainGtvObjectiveData = brainGtvObjectives[numFractions];
+            if (brainGtvObjectiveData) {
+                const objective = doc.createElement('Objective');
+                createElementWithText(doc, objective, 'StructureId', brainGtvId);
+
+                // Clinical Goal: V_DoseGy < X cm3
+                const clinicalGoal = doc.createElement('ClinicalGoal');
+                createElementWithText(doc, clinicalGoal, 'Type', 'VolumeDose');
+                createElementWithText(doc, clinicalGoal, 'Qualifier', 'ShouldBeLess');
+                const volume = doc.createElement('Volume');
+                createElementWithText(doc, volume, 'Value', brainGtvObjectiveData.volume.toString());
+                createElementWithText(doc, volume, 'Unit', 'Absolute');
+                clinicalGoal.appendChild(volume);
+                const dose = doc.createElement('Dose');
+                createElementWithText(doc, dose, 'Value', brainGtvObjectiveData.dose.toString());
+                createElementWithText(doc, dose, 'Unit', 'Absolute');
+                clinicalGoal.appendChild(dose);
+                objective.appendChild(clinicalGoal);
+
+                // Acceptable Variation
+                const av = doc.createElement('AcceptableVariation');
+                createElementWithText(doc, av, 'Type', 'VolumeDose');
+                createElementWithText(doc, av, 'Qualifier', 'ShouldBeLessOrEqual');
+                const avVolume = doc.createElement('Volume');
+                createElementWithText(doc, avVolume, 'Value', brainGtvObjectiveData.variation.toString());
+                createElementWithText(doc, avVolume, 'Unit', 'Absolute');
+                av.appendChild(avVolume);
+                const avDose = doc.createElement('Dose');
+                createElementWithText(doc, avDose, 'Value', brainGtvObjectiveData.dose.toString());
+                createElementWithText(doc, avDose, 'Unit', 'Absolute');
+                av.appendChild(avDose);
+                objective.appendChild(av);
+
+                // Priority
+                createElementWithText(doc, objective, 'Priority', '3');
+                createElementWithText(doc, objective, 'PriorityWithinGroup', priority3Counter++);
+                oarObjectives.appendChild(objective);
+            }
+
+            phase.appendChild(oarObjectives);
+
+            const normalization = doc.createElement('Normalization');
+            createElementWithText(doc, normalization, 'Type', 'NoNormalization');
+            phase.appendChild(normalization);
+
+            const motionManagement = doc.createElement('MotionManagement');
+            motionManagement.setAttribute('Technique', '');
+            phase.appendChild(motionManagement);
+
+            const prescribedSessions = doc.createElement('PrescribedSessions');
+            for(let i = 1; i <= numFractions; i++) {
+                const session = doc.createElement('Session');
+                session.setAttribute('Id', i);
+                createElementWithText(doc, session, 'ReferencedPhase', '1');
+                createElementWithText(doc, session, 'Imaging', 'None');
+                prescribedSessions.appendChild(session);
+            }
+
+            root.appendChild(doc.createElement('TargetEvaluationPoints'));
+            root.appendChild(phases);
+            root.appendChild(prescribedSessions);
+
+            return doc;
+        }
+
+        // Helper function to create an element with text content
+        function createElementWithText(doc, parent, name, text) {
+            const elem = doc.createElement(name);
+            elem.textContent = text;
+            parent.appendChild(elem);
+        }
+        
+        // Helper function to create a structure element with ContouringProtocol
+        function addStructure(doc, parent, id, name, code, color, protocol = null) {
+            const structure = doc.createElement('Structure');
+            structure.setAttribute('Id', id);
+            
+            const codeElem = doc.createElement('Code');
+            codeElem.textContent = code.Code;
+            structure.appendChild(codeElem);
+
+            const schemaElem = doc.createElement('Schema');
+            schemaElem.textContent = code.Schema;
+            structure.appendChild(schemaElem);
+
+            const schemaVersionElem = doc.createElement('SchemaVersion');
+            schemaVersionElem.textContent = code.SchemaVersion || '';
+            structure.appendChild(schemaVersionElem);
+
+            const meaningElem = doc.createElement('Meaning');
+            meaningElem.textContent = code.Meaning;
+            structure.appendChild(meaningElem);
+
+            const colorElem = doc.createElement('Color');
+            colorElem.textContent = color;
+            structure.appendChild(colorElem);
+
+            const nameElem = doc.createElement('Name');
+            nameElem.textContent = name;
+            structure.appendChild(nameElem);
+
+            if (protocol) {
+                const protocolElem = doc.createElement('ContouringProtocol');
+                const cdata = doc.createCDATASection(protocol);
+                protocolElem.appendChild(cdata);
+                structure.appendChild(protocolElem);
+            }
+            parent.appendChild(structure);
+        }
+        
+        // Helper to create the ClassificationCode block
+        function createClassificationCode(doc, code) {
+            const classificationCode = doc.createElement('ClassificationCode');
+            createElementWithText(doc, classificationCode, 'Code', code.Code);
+            createElementWithText(doc, classificationCode, 'Schema', code.Schema);
+            createElementWithText(doc, classificationCode, 'SchemaVersion', code.SchemaVersion || '');
+            createElementWithText(doc, classificationCode, 'Meaning', code.Meaning);
+            return classificationCode;
+        }
+
+        // Helper function to create a margin protocol for derived structures
+        function createMarginProtocol(doc, gtvId, gtvCode, margin) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const marginOp = doc.createElement('Margin');
+            const operands = doc.createElement('Operands');
+            const structure = doc.createElement('Structure');
+            
+            createElementWithText(doc, structure, 'Identifier', gtvId);
+            structure.appendChild(createClassificationCode(doc, gtvCode));
+            
+            operands.appendChild(structure);
+            marginOp.appendChild(operands);
+            createElementWithText(doc, marginOp, 'MarginValue', margin);
+            structureArithmetic.appendChild(marginOp);
+            
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+
+        // Helper function to create a union protocol for derived structures
+        function createUnionProtocol(doc, structureIds, structureCode) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            
+            let structureNodes = structureIds.map(id => {
+                const structure = doc.createElement('Structure');
+                createElementWithText(doc, structure, 'Identifier', id);
+                structure.appendChild(createClassificationCode(doc, structureCode));
+                return structure;
+            });
+
+            if (structureNodes.length === 0) {
+                return ""; // Should not happen
+            }
+
+            if (structureNodes.length === 1) {
+                const identityOp = doc.createElement('IdentityOperation');
+                const operands = doc.createElement('Operands');
+                operands.appendChild(structureNodes[0]);
+                identityOp.appendChild(operands);
+                structureArithmetic.appendChild(identityOp);
+            } else {
+                 // Create a nested binary tree of unions
+                const buildUnionTree = (nodes) => {
+                    if (nodes.length === 1) {
+                        return nodes[0];
+                    }
+                    if (nodes.length === 2) {
+                        const union = doc.createElement('Union');
+                        const operands = doc.createElement('Operands');
+                        operands.appendChild(nodes[0]);
+                        operands.appendChild(nodes[1]);
+                        union.appendChild(operands);
+                        return union;
+                    }
+                    const mid = Math.ceil(nodes.length / 2);
+                    const left = buildUnionTree(nodes.slice(0, mid));
+                    const right = buildUnionTree(nodes.slice(mid));
+                    
+                    const union = doc.createElement('Union');
+                    const operands = doc.createElement('Operands');
+                    operands.appendChild(left);
+                    operands.appendChild(right);
+                    union.appendChild(operands);
+                    return union;
+                };
+                
+                structureArithmetic.appendChild(buildUnionTree(structureNodes));
+            }
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+        
+        // Helper function to create an identity protocol for a single derived structure
+        function createIdentityProtocol(doc, structureId, structureCode) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const identityOp = doc.createElement('IdentityOperation');
+            const operands = doc.createElement('Operands');
+            const structure = doc.createElement('Structure');
+            
+            createElementWithText(doc, structure, 'Identifier', structureId);
+            structure.appendChild(createClassificationCode(doc, structureCode));
+            
+            operands.appendChild(structure);
+            identityOp.appendChild(operands);
+            structureArithmetic.appendChild(identityOp);
+            
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+
+        // Helper function to create a Wall protocol from an identifier
+        function createWallProtocol(doc, ptvIdentifier, ptvCode, innerWall, outerWall) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const wallOp = doc.createElement('Wall');
+            const operands = doc.createElement('Operands');
+
+            const structure = doc.createElement('Structure');
+            createElementWithText(doc, structure, 'Identifier', ptvIdentifier);
+            structure.appendChild(createClassificationCode(doc, ptvCode));
+
+            operands.appendChild(structure);
+            wallOp.appendChild(operands);
+            createElementWithText(doc, wallOp, 'InnerWallValue', innerWall);
+            createElementWithText(doc, wallOp, 'OuterWallValue', outerWall);
+            structureArithmetic.appendChild(wallOp);
+            
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+        
+        // Helper function to create a Wall protocol with a Body intersection
+        function createIntersectionWallBodyProtocol(doc, ptvIdentifier, ptvCode, innerWall, outerWall) {
+            const bodyCode = { Code: 'BODY', Schema: '99VMS_STRUCTCODE', Meaning: 'Body plus other external items', SchemaVersion: '1.0' };
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const intersection = doc.createElement('Intersection');
+            const operands = doc.createElement('Operands');
+            
+            // Operand 1: The Wall operation
+            const wallOp = doc.createElement('Wall');
+            const wallOperands = doc.createElement('Operands');
+            const wallStructure = doc.createElement('Structure');
+            createElementWithText(doc, wallStructure, 'Identifier', ptvIdentifier);
+            wallStructure.appendChild(createClassificationCode(doc, ptvCode));
+            wallOperands.appendChild(wallStructure);
+            wallOp.appendChild(wallOperands);
+            createElementWithText(doc, wallOp, 'InnerWallValue', innerWall);
+            createElementWithText(doc, wallOp, 'OuterWallValue', outerWall);
+            operands.appendChild(wallOp);
+            
+            // Operand 2: The Body structure
+            const bodyStructure = doc.createElement('Structure');
+            createElementWithText(doc, bodyStructure, 'Identifier', 'Body');
+            bodyStructure.appendChild(createClassificationCode(doc, bodyCode));
+            operands.appendChild(bodyStructure);
+            
+            intersection.appendChild(operands);
+            structureArithmetic.appendChild(intersection);
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+        
+        // Helper function to create a Wall protocol with a Brain intersection
+        function createIntersectionWallBrainProtocol(doc, ptvIdentifier, ptvCode, innerWall, outerWall) {
+            const brainCode = { Code: '50801', Schema: 'FMA', Meaning: 'Brain', SchemaVersion: '3.2' };
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const intersection = doc.createElement('Intersection');
+            const operands = doc.createElement('Operands');
+
+            // Operand 1: The Wall operation
+            const wallOp = doc.createElement('Wall');
+            const wallOperands = doc.createElement('Operands');
+            const wallStructure = doc.createElement('Structure');
+            createElementWithText(doc, wallStructure, 'Identifier', ptvIdentifier);
+            wallStructure.appendChild(createClassificationCode(doc, ptvCode));
+            wallOperands.appendChild(wallStructure);
+            wallOp.appendChild(wallOperands);
+            createElementWithText(doc, wallOp, 'InnerWallValue', innerWall);
+            createElementWithText(doc, wallOp, 'OuterWallValue', outerWall);
+            operands.appendChild(wallOp);
+
+            // Operand 2: The Brain structure
+            const brainStructure = doc.createElement('Structure');
+            createElementWithText(doc, brainStructure, 'Identifier', 'OAR5');
+            brainStructure.appendChild(createClassificationCode(doc, brainCode));
+            operands.appendChild(brainStructure);
+            
+            intersection.appendChild(operands);
+            structureArithmetic.appendChild(intersection);
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+
+        function createBrainGtvProtocol(doc, allNsGtvInfos) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const subtraction = doc.createElement('Subtraction');
+            const operands = doc.createElement('Operands');
+
+            // Operand 1: The Brain structure
+            const brainOar = oarCodes.find(o => o.id === 'OAR5');
+            const brainStructure = doc.createElement('Structure');
+            createElementWithText(doc, brainStructure, 'Identifier', brainOar.id);
+            const brainCode = { Code: brainOar.code, Schema: brainOar.schema, SchemaVersion: brainOar.version, Meaning: brainOar.meaning };
+            brainStructure.appendChild(createClassificationCode(doc, brainCode));
+            operands.appendChild(brainStructure);
+
+            // Operand 2: The Union of all NS_GTVs
+            if (allNsGtvInfos.length > 1) {
+                const union = doc.createElement('Union');
+                const unionOperands = doc.createElement('Operands');
+                allNsGtvInfos.forEach(info => {
+                    const gtvStructure = doc.createElement('Structure');
+                    createElementWithText(doc, gtvStructure, 'Identifier', info.nsGtvId);
+                    gtvStructure.appendChild(createClassificationCode(doc, info.nsGtvCode));
+                    unionOperands.appendChild(gtvStructure);
+                });
+                union.appendChild(unionOperands);
+                operands.appendChild(union);
+            } else if (allNsGtvInfos.length === 1) {
+                const info = allNsGtvInfos[0];
+                const gtvStructure = doc.createElement('Structure');
+                createElementWithText(doc, gtvStructure, 'Identifier', info.nsGtvId);
+                gtvStructure.appendChild(createClassificationCode(doc, info.nsGtvCode));
+                operands.appendChild(gtvStructure);
+            }
+
+            subtraction.appendChild(operands);
+            structureArithmetic.appendChild(subtraction);
+            
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+
+        function createOpticsPrvProtocol(doc) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            
+            const union1 = doc.createElement('Union');
+            const operands1 = doc.createElement('Operands');
+
+            const union2 = doc.createElement('Union');
+            const operands2 = doc.createElement('Operands');
+
+            const optics = [
+                { id: 'OAR10' }, // Chiasm
+                { id: 'OAR7' },  // Left Nerve
+                { id: 'OAR6' }   // Right Nerve
+            ];
+
+            const oarInfo = optics.map(o => oarCodes.find(oc => oc.id === o.id));
+
+            // Helper to create a margin element
+            const createMarginElement = (info) => {
+                const margin = doc.createElement('Margin');
+                const operands = doc.createElement('Operands');
+                const structure = doc.createElement('Structure');
+                createElementWithText(doc, structure, 'Identifier', info.id);
+                const code = { Code: info.code, Schema: info.schema, SchemaVersion: info.version, Meaning: info.meaning };
+                structure.appendChild(createClassificationCode(doc, code));
+                operands.appendChild(structure);
+                margin.appendChild(operands);
+                createElementWithText(doc, margin, 'MarginValue', 1);
+                return margin;
+            };
+
+            // Inner Union: Chiasm (OAR10) + Left Nerve (OAR7)
+            operands2.appendChild(createMarginElement(oarInfo[0]));
+            operands2.appendChild(createMarginElement(oarInfo[1]));
+            union2.appendChild(operands2);
+            
+            // Outer Union: (Inner Union) + Right Nerve (OAR6)
+            operands1.appendChild(union2);
+            operands1.appendChild(createMarginElement(oarInfo[2]));
+            
+            union1.appendChild(operands1);
+            structureArithmetic.appendChild(union1);
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+
+        // Helper function to create a complex subtraction protocol for rings
+        function createComplexSubtractionRingProtocol(doc, allDoseInfo, currentDoseKey, innerWallValue, outerWallValue, subtractionMarginValue, intersectionType) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const serializer = new XMLSerializer();
+            const bodyCode = { Code: 'BODY', Schema: '99VMS_STRUCTCODE', Meaning: 'Body plus other external items', SchemaVersion: '1.0' };
+            const brainCode = { Code: '50801', Schema: 'FMA', Meaning: 'Brain', SchemaVersion: '3.2' };
+            
+            const currentDoseInfo = allDoseInfo[currentDoseKey];
+
+            // Create the primary operation node: Wall intersected with another structure
+            const intersection = doc.createElement('Intersection');
+            const intersectionOperands = doc.createElement('Operands');
+            
+            // Operand 1 of Intersection: The Wall operation
+            const wallOp = doc.createElement('Wall');
+            const wallOperands = doc.createElement('Operands');
+            const wallStructure = doc.createElement('Structure');
+            createElementWithText(doc, wallStructure, 'Identifier', currentDoseInfo.nsPtvId);
+            wallStructure.appendChild(createClassificationCode(doc, currentDoseInfo.nsPtvCode));
+            wallOperands.appendChild(wallStructure);
+            wallOp.appendChild(wallOperands);
+            createElementWithText(doc, wallOp, 'InnerWallValue', innerWallValue);
+            createElementWithText(doc, wallOp, 'OuterWallValue', outerWallValue);
+            intersectionOperands.appendChild(wallOp);
+
+            // Operand 2 of Intersection: The Body or Brain structure
+            const intersectionStructure = doc.createElement('Structure');
+            if (intersectionType === 'Body') {
+                createElementWithText(doc, intersectionStructure, 'Identifier', 'Body');
+                intersectionStructure.appendChild(createClassificationCode(doc, bodyCode));
+            } else if (intersectionType === 'Brain') {
+                const brainOar = oarCodes.find(o => o.id === 'OAR5');
+                createElementWithText(doc, intersectionStructure, 'Identifier', 'OAR5'); // Brain's ID is OAR5
+                const brainClassificationCode = { Code: brainOar.code, Schema: brainOar.schema, SchemaVersion: brainOar.version, Meaning: brainOar.meaning };
+                intersectionStructure.appendChild(createClassificationCode(doc, brainClassificationCode));
+            }
+            intersectionOperands.appendChild(intersectionStructure);
+
+            intersection.appendChild(intersectionOperands);
+
+            // Get other PTVs to subtract
+            const otherDoseKeys = Object.keys(allDoseInfo).filter(key => key !== currentDoseKey);
+
+            if (otherDoseKeys.length === 0) {
+                // No subtraction needed, just use the intersection
+                structureArithmetic.appendChild(intersection);
+            } else {
+                const subtraction = doc.createElement('Subtraction');
+                const subtractionOperands = doc.createElement('Operands');
+                
+                // Operand 1 of Subtraction: The intersection operation
+                subtractionOperands.appendChild(intersection);
+
+                // Subsequent Operands of Subtraction: The margins to subtract
+                otherDoseKeys.forEach(key => {
+                    const otherDose = allDoseInfo[key];
+                    const marginOp = doc.createElement('Margin');
+                    const marginOperands = doc.createElement('Operands');
+                    const marginStructure = doc.createElement('Structure');
+                    
+                    createElementWithText(doc, marginStructure, 'Identifier', otherDose.nsPtvId);
+                    marginStructure.appendChild(createClassificationCode(doc, otherDose.nsPtvCode));
+                    
+                    marginOperands.appendChild(marginStructure);
+                    marginOp.appendChild(marginOperands);
+                    createElementWithText(doc, marginOp, 'MarginValue', subtractionMarginValue);
+
+                    subtractionOperands.appendChild(marginOp);
+                });
+
+                subtraction.appendChild(subtractionOperands);
+                structureArithmetic.appendChild(subtraction);
+    }
+
+    return serializer.serializeToString(structureArithmetic);
+}
+
+        // Helper function to create a union margin protocol for subtraction
+        function createUnionMarginProtocol(doc, structureIds, structureCode, margin) {
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const marginOp = doc.createElement('Margin');
+            const operands = doc.createElement('Operands');
+
+            const union = doc.createElement('Union');
+            union.setAttribute('Type', 'Union');
+            const unionOperands = doc.createElement('Operands');
+            
+            structureIds.forEach(id => {
+                const structure = doc.createElement('Structure');
+                createElementWithText(doc, structure, 'Identifier', id);
+                structure.appendChild(createClassificationCode(doc, structureCode));
+                unionOperands.appendChild(structure);
+            });
+            
+            union.appendChild(unionOperands);
+            operands.appendChild(union);
+
+            marginOp.appendChild(operands);
+            createElementWithText(doc, marginOp, 'MarginValue', margin);
+            structureArithmetic.appendChild(marginOp);
+            
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(structureArithmetic);
+        }
+        
+        // Helper function to create a subtraction protocol for derived structures
+        function createSubtractionProtocol(doc, primaryProtocol, subtractionProtocol) {
+            const serializer = new XMLSerializer();
+            const primaryDoc = new DOMParser().parseFromString(primaryProtocol, 'text/xml');
+            const subtractionDoc = new DOMParser().parseFromString(subtractionProtocol, 'text/xml');
+
+            const structureArithmetic = doc.createElement('StructureArithmetic');
+            const subtraction = doc.createElement('Subtraction');
+            const operands = doc.createElement('Operands');
+
+            // Operand 1: The primary protocol content
+            operands.appendChild(doc.importNode(primaryDoc.documentElement.firstChild, true));
+            
+            // Operand 2: The subtraction protocol content
+            operands.appendChild(doc.importNode(subtractionDoc.documentElement.firstChild, true));
+            
+            subtraction.appendChild(operands);
+            structureArithmetic.appendChild(subtraction);
+            return serializer.serializeToString(structureArithmetic);
+        }
+        
+        function addObjective(doc, parent, priority, priorityWithinGroup, type, qualifier, volUnit, volValue, doseUnit, doseValue, avType, avQualifier, avVolUnit, avVolValue, avDoseUnit, avDoseValue) {
+            const objective = doc.createElement('Objective');
+            
+            // Clinical Goal
+            const clinicalGoal = doc.createElement('ClinicalGoal');
+            createElementWithText(doc, clinicalGoal, 'Type', type);
+            createElementWithText(doc, clinicalGoal, 'Qualifier', qualifier);
+            
+            if (volUnit) {
+                const volume = doc.createElement('Volume');
+                createElementWithText(doc, volume, 'Value', volValue);
+                createElementWithText(doc, volume, 'Unit', volUnit);
+                clinicalGoal.appendChild(volume);
+            }
+            
+            const dose = doc.createElement('Dose');
+            createElementWithText(doc, dose, 'Value', doseValue);
+            createElementWithText(doc, dose, 'Unit', doseUnit);
+                clinicalGoal.appendChild(dose);
+            
+            objective.appendChild(clinicalGoal);
+
+            // Acceptable Variation
+            const av = doc.createElement('AcceptableVariation');
+            createElementWithText(doc, av, 'Type', avType);
+            createElementWithText(doc, av, 'Qualifier', avQualifier);
+            
+            if (avVolUnit) {
+                const avVolume = doc.createElement('Volume');
+                createElementWithText(doc, avVolume, 'Value', avVolValue);
+                createElementWithText(doc, avVolume, 'Unit', avVolUnit);
+                av.appendChild(avVolume);
+            }
+            
+            const avDose = doc.createElement('Dose');
+            createElementWithText(doc, avDose, 'Value', avDoseValue);
+            createElementWithText(doc, avDose, 'Unit', avDoseUnit);
+            av.appendChild(avDose);
+            
+            objective.appendChild(av);
+
+            // Priority and PriorityWithinGroup
+            const priorityElem = doc.createElement('Priority');
+            priorityElem.textContent = priority;
+            objective.appendChild(priorityElem);
+
+            const priorityWithinGroupElem = doc.createElement('PriorityWithinGroup');
+            priorityWithinGroupElem.textContent = priorityWithinGroup;
+            objective.appendChild(priorityWithinGroupElem);
+
+            parent.appendChild(objective);
+        }
+
+        function serializeXML(xmlDoc) {
+            const serializer = new XMLSerializer();
+            let xmlString = serializer.serializeToString(xmlDoc);
+
+            if (!xmlString.startsWith('<?xml')) {
+                xmlString = '<?xml version="1.0" encoding="utf-8"?>\n' + xmlString;
+            }
+
+            return formatXML(xmlString);
+        }
+
+        function downloadXMLFile(xmlString, templateName) {
+            const blob = new Blob([xmlString], { type: 'text/xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${templateName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.xml`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Helper function to format XML with indentation for readability
+        function formatXML(xml) {
+            const PADDING = '  ';
+            let formatted = '';
+            let pad = 0;
+            
+            const xmlDeclarationMatch = xml.match(/^<\?xml[^>]*>\s*/);
+            const xmlDeclaration = xmlDeclarationMatch ? xmlDeclarationMatch[0].trim() : '';
+            const xmlContent = xmlDeclarationMatch ? xml.substring(xmlDeclarationMatch[0].length) : xml;
+            
+            const reg = /(>)(<)(\/*)/g;
+            let processedXml = xmlContent.replace(reg, '$1\n$2$3');
+            
+            const lines = processedXml.split('\n');
+            
+            lines.forEach(line => {
+                line = line.trim();
+                if (line.length === 0) return;
+                
+                let indent = 0;
+                
+                if (line.match(/^<\/\w/)) {
+                    pad = Math.max(0, pad - 1);
+                } else if (line.match(/.+<\/\w[^>]*>$/) || line.match(/^<\w[^>]*\/>$/)) {
+                    indent = 0;
+                } else if (line.match(/^<\w[^>]*[^\/]>/) && !line.match(/.+<\/\w[^>]*>$/)) {
+                    indent = 1;
+                }
+                
+                formatted += PADDING.repeat(pad) + line + '\n';
+                pad += indent;
+            });
+            
+            const result = xmlDeclaration ? xmlDeclaration + '\n' + formatted.trim() : formatted.trim();
+            return result;
+        }
+    </script>
+</body>
+</html>
+
