@@ -1637,6 +1637,8 @@ function updateSubjectStatus(subjectName) {
   if (subjectName === S.currentSubject) {
     const triggerDot = document.getElementById('subj-trigger-dot');
     if (triggerDot) triggerDot.className = cls;
+    // Keep the rank-carrot text in sync with the new status
+    if (typeof RankWorkspace !== 'undefined') RankWorkspace._refreshCarrot();
   }
 }
 
@@ -1665,106 +1667,321 @@ let _refreshSubjectsAndStatus = null;
 // ─────────────────────────────────────────────────────────────────────────────
 // Ranking
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Ranking Workspace — carrot-expanded overlay that drives both phases
+// ─────────────────────────────────────────────────────────────────────────────
+// Replaces the always-visible rank bar + post-submit modal with a unified
+// overlay that:
+//   Phase 1: rank + Likert (plan quality) per plan, no plan details visible
+//   Phase 2: same form, with plan-detail table revealed at top, pre-populated
+// Ranking-status carrot (always visible at bottom of viewport) shows
+// progress and is the entry point.
+const RankWorkspace = {
+  // _phase1Data is non-null when phase 1 has been submitted in the current
+  // session and we're either showing or about to show phase 2.
+  _phase1Data: null,
+
+  // Open the workspace overlay. Reopens at the appropriate phase view.
+  open() {
+    // If reviewer dismissed the workspace mid-phase-2, restore phase 2 view
+    // (form values are still in place; phase1Data is preserved).
+    if (this._phase1Data) {
+      // Already in phase 2 view from earlier transition; just show.
+    } else {
+      this._toPhase1View();
+    }
+    document.getElementById('rank-overlay').classList.remove('hidden');
+  },
+
+  // Hide overlay (does not discard saved phase 1 or in-progress phase 2 form).
+  close() {
+    document.getElementById('rank-overlay').classList.add('hidden');
+  },
+
+  // Called on subject load — clear form, return to phase 1 view, refresh carrot.
+  reset() {
+    this.close();
+    this._phase1Data = null;
+    PLANS.forEach(p => {
+      document.getElementById(`rank-${p}`).value = '';
+      document.getElementById(`likert-${p}`).value = '';
+    });
+    document.getElementById('rank-notes').value = '';
+    document.getElementById('tie-confirm').checked = false;
+    document.getElementById('tie-confirm-wrap').style.display = 'none';
+    document.getElementById('rank-status').textContent = '';
+    this._toPhase1View();
+    this._refreshCarrot();
+  },
+
+  _toPhase1View() {
+    document.getElementById('rank-panel').classList.remove('phase2');
+    document.getElementById('rank-panel-title').textContent = 'Phase 1 — Rank plans by dose';
+    document.getElementById('rank-panel-subtitle').textContent =
+      'Provide your ranking and plan-quality score for each plan, based on the dose distributions shown.';
+    document.getElementById('rank-form-section-label').textContent = 'Your assessment';
+    document.getElementById('rank-details-pane').classList.add('hidden');
+    document.getElementById('submit-btn').textContent = 'Submit Phase 1';
+    document.getElementById('rank-skip-btn').classList.add('hidden');
+    // Disabled until validateRanking() re-checks once user changes a field
+    document.getElementById('submit-btn').disabled = true;
+  },
+
+  // Phase 1 → Phase 2 transition (called from initRanking after phase 1 save).
+  transitionToPhase2(resultBase, phase1Rankings, phase1Likert) {
+    this._phase1Data = { rankings: phase1Rankings, likert: phase1Likert, resultBase };
+
+    // Render plan-detail table at the top of the panel
+    document.getElementById('rank-details-content').innerHTML =
+      this._planDetailsTableHtml(phase1Rankings);
+    document.getElementById('rank-details-pane').classList.remove('hidden');
+
+    // Style + copy
+    document.getElementById('rank-panel').classList.add('phase2');
+    document.getElementById('rank-panel-title').textContent = 'Phase 2 — Final ranking with plan details';
+    document.getElementById('rank-panel-subtitle').textContent =
+      'You may now revise your ranking and plan-quality scores based on the delivery parameters shown above.';
+    document.getElementById('rank-form-section-label').textContent = 'Revised assessment';
+
+    // Pre-populate form with phase 1 values
+    PLANS.forEach(p => {
+      document.getElementById(`rank-${p}`).value = phase1Rankings[p] || '';
+      document.getElementById(`likert-${p}`).value = phase1Likert[p] || '';
+    });
+    document.getElementById('rank-notes').value = '';
+    document.getElementById('tie-confirm').checked = false;
+    document.getElementById('tie-confirm-wrap').style.display = 'none';
+
+    // Phase 2 buttons
+    document.getElementById('submit-btn').textContent = 'Submit Phase 2';
+    document.getElementById('submit-btn').disabled = false;
+    document.getElementById('rank-skip-btn').classList.remove('hidden');
+    document.getElementById('rank-status').textContent =
+      'Phase 1 saved. Confirm or revise below, then submit Phase 2.';
+    document.getElementById('rank-status').style.color = 'var(--accent)';
+
+    // Scroll to top so the user sees the plan details first
+    document.getElementById('rank-panel-body').scrollTop = 0;
+
+    this._refreshCarrot();
+  },
+
+  // After phase 2 submitted (or skipped) — collapse and update carrot.
+  markComplete() {
+    this._phase1Data = null;
+    this.close();
+    this._refreshCarrot();
+  },
+
+  // Returns true if the user is mid-phase-2 (phase 1 saved, phase 2 not).
+  isInPhase2() { return this._phase1Data !== null; },
+
+  // Update the always-visible carrot text/style based on rankingStatus cache.
+  _refreshCarrot() {
+    const carrot = document.getElementById('rank-carrot');
+    const text   = document.getElementById('rank-carrot-text');
+    const status = document.getElementById('rank-carrot-status');
+    const subj = S.currentSubject;
+    const st = subj ? (S.rankingStatus[subj] || {}) : {};
+
+    if (st.phase1 && st.phase2) {
+      carrot.classList.add('complete');
+      text.innerHTML = '&#x2714; Ranking submitted (both phases) &mdash; click to amend';
+      status.textContent = '';
+    } else if (st.phase1 || this._phase1Data) {
+      carrot.classList.remove('complete');
+      text.innerHTML = '&#x25B2; Continue to Phase 2 &mdash; final ranking with plan details';
+      status.textContent = 'Phase 1 saved';
+    } else {
+      carrot.classList.remove('complete');
+      text.innerHTML = '&#x25B2; Submit ranking &amp; plan-quality scores';
+      status.textContent = '';
+    }
+  },
+
+  // Build the plan-detail table HTML that appears at top of phase 2 view.
+  // Number-of-arcs intentionally omitted (institutional bias control).
+  _planDetailsTableHtml(phase1Rankings) {
+    const pp = S.planParams || {};
+    const fmtTime = (s) => {
+      if (s == null) return '—';
+      const m = Math.floor(s / 60);
+      const sec = Math.round(s % 60);
+      return `${m}:${String(sec).padStart(2, '0')} (${(s/60).toFixed(1)} min)`;
+    };
+    const fmtLimit = (p) => {
+      if (!p || !p.limitingBreakdown) return '—';
+      const lb = p.limitingBreakdown;
+      const parts = [];
+      if (lb.mu_pct > 1)     parts.push(`MU ${lb.mu_pct.toFixed(0)}%`);
+      if (lb.gantry_pct > 1) parts.push(`Gantry ${lb.gantry_pct.toFixed(0)}%`);
+      if (lb.mlc_pct > 1)    parts.push(`MLC ${lb.mlc_pct.toFixed(0)}%`);
+      return parts.join(' / ');
+    };
+
+    let html = '<table><thead><tr>';
+    html += '<th>Parameter</th>';
+    html += '<th style="color:var(--row-A);text-align:center">Plan A</th>';
+    html += '<th style="color:var(--row-B);text-align:center">Plan B</th>';
+    html += '<th style="color:var(--row-C);text-align:center">Plan C</th>';
+    html += '</tr></thead><tbody>';
+
+    const rows = [
+      ['Your initial ranking',   p => phase1Rankings[p] ? `${phase1Rankings[p]}${ordinal(phase1Rankings[p])}` : '—'],
+      ['Total MU',               p => pp[p] ? Math.round(pp[p].totalMU).toLocaleString() : '—'],
+      ['Est. delivery time',     p => pp[p] ? fmtTime(pp[p].deliveryTimeS) : '—'],
+      ['Speed-limiting factor',  p => pp[p] ? fmtLimit(pp[p]) : '—'],
+    ];
+    rows.forEach(([label, fn]) => {
+      html += `<tr><td>${label}</td>`;
+      PLANS.forEach(p => { html += `<td>${fn(p)}</td>`; });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  },
+};
+
 function initRanking() {
-  const sels = PLANS.map(p => document.getElementById(`rank-${p}`));
-  const btn  = document.getElementById('submit-btn');
-  const stat = document.getElementById('rank-status');
-  const tieWrap = document.getElementById('tie-confirm-wrap');
-  const tieCheck = document.getElementById('tie-confirm');
+  const rankSels   = PLANS.map(p => document.getElementById(`rank-${p}`));
+  const likertSels = PLANS.map(p => document.getElementById(`likert-${p}`));
+  const btn        = document.getElementById('submit-btn');
+  const skipBtn    = document.getElementById('rank-skip-btn');
+  const stat       = document.getElementById('rank-status');
+  const tieWrap    = document.getElementById('tie-confirm-wrap');
+  const tieCheck   = document.getElementById('tie-confirm');
+
+  // Carrot click → open the workspace
+  document.getElementById('rank-carrot').addEventListener('click', () => RankWorkspace.open());
+  // Close button or backdrop click → hide overlay (without discarding state)
+  document.getElementById('rank-panel-close').addEventListener('click', () => RankWorkspace.close());
+  document.getElementById('rank-overlay-backdrop').addEventListener('click', () => RankWorkspace.close());
 
   function validateRanking() {
     const reviewer = document.getElementById('reviewer-select').value;
-    const vals = sels.map(s => s.value).filter(v => v);
-    const allFilled = vals.length === 3;
-    const hasFirst = vals.includes('1');
-    const hasTies = allFilled && new Set(vals).size < 3;
+    const rankVals   = rankSels.map(s => s.value).filter(v => v);
+    const likertVals = likertSels.map(s => s.value).filter(v => v);
+    const allRanked  = rankVals.length === 3;
+    const allRated   = likertVals.length === 3;
+    const hasFirst   = rankVals.includes('1');
+    const hasTies    = allRanked && new Set(rankVals).size < 3;
     const tieConfirmed = tieCheck.checked;
 
-    // Show/hide tie confirmation
     tieWrap.style.display = hasTies ? '' : 'none';
     if (!hasTies) tieCheck.checked = false;
 
-    // Determine if ready
     let ready = false;
     if (!reviewer) {
       stat.textContent = 'Select a reviewer first.';
       stat.style.color = 'var(--yellow)';
-    } else if (!allFilled) {
-      stat.textContent = '';
-      stat.style.color = '';
+    } else if (!allRanked) {
+      stat.textContent = 'Provide a rank (1st/2nd/3rd) for all three plans.';
+      stat.style.color = 'var(--text-dim)';
+    } else if (!allRated) {
+      stat.textContent = 'Provide a plan-quality score for all three plans.';
+      stat.style.color = 'var(--text-dim)';
     } else if (!hasFirst) {
       stat.textContent = 'At least one plan must be ranked 1st.';
       stat.style.color = 'var(--red)';
     } else if (hasTies && !tieConfirmed) {
-      stat.textContent = 'Tied rankings — check the box to confirm.';
+      stat.textContent = 'Tied rankings — check the box below to confirm.';
       stat.style.color = 'var(--yellow)';
     } else {
-      stat.textContent = 'Ready.';
+      stat.textContent = 'Ready to submit.';
       stat.style.color = 'var(--green)';
       ready = true;
     }
-
     btn.disabled = !ready;
   }
 
-  sels.forEach(sel => sel.addEventListener('change', validateRanking));
+  rankSels.forEach(s => s.addEventListener('change', validateRanking));
+  likertSels.forEach(s => s.addEventListener('change', validateRanking));
   tieCheck.addEventListener('change', validateRanking);
   document.getElementById('reviewer-select').addEventListener('change', validateRanking);
 
+  // Submit button — branches based on whether we're in phase 1 or phase 2.
   btn.addEventListener('click', async () => {
     const reviewer = document.getElementById('reviewer-select').value;
     if (!reviewer || !S.currentSite || !S.currentSubject) return;
 
-    // Check for existing ranking
+    if (RankWorkspace.isInPhase2()) {
+      // ── Phase 2 submission ──
+      await submitPhase2(reviewer);
+    } else {
+      // ── Phase 1 submission ──
+      await submitPhase1(reviewer);
+    }
+  });
+
+  // Skip phase 2 — preserves phase 1 only, marks phase 2 as skipped.
+  skipBtn.addEventListener('click', async () => {
+    const data = RankWorkspace._phase1Data;
+    if (!data) { RankWorkspace.close(); return; }
+    stat.textContent = 'Saving (no revision)…';
+    stat.style.color = 'var(--text-dim)';
+    try {
+      await DataLoader.saveRanking({
+        ...data.resultBase,
+        phase2_skipped: true,
+        timestamp_phase2: new Date().toISOString(),
+      });
+      S.rankingStatus[S.currentSubject] = { phase1: true, phase2: true };
+      updateSubjectStatus(S.currentSubject);
+      RankWorkspace.markComplete();
+    } catch (e) {
+      stat.textContent = 'Save failed — see console.';
+      stat.style.color = 'var(--red)';
+      console.error(e);
+    }
+  });
+
+  async function submitPhase1(reviewer) {
+    // Existing-ranking overwrite check (preserved from previous flow)
     const existing = await DataLoader.checkExistingRanking(S.currentSite, S.currentSubject, reviewer);
     if (existing) {
-      // Show overwrite confirmation
       document.getElementById('overwrite-msg').textContent =
         `${reviewer} already submitted a ranking for this subject on ${new Date(existing.timestamp).toLocaleString()}. Overwrite?`;
       document.getElementById('overwrite-modal').classList.remove('hidden');
-
-      // Wait for user decision
       const confirmed = await new Promise(resolve => {
         document.getElementById('overwrite-confirm').onclick = () => resolve(true);
-        document.getElementById('overwrite-cancel').onclick = () => resolve(false);
+        document.getElementById('overwrite-cancel').onclick  = () => resolve(false);
       });
       document.getElementById('overwrite-modal').classList.add('hidden');
-
       if (!confirmed) return;
     }
 
-    const notes = document.getElementById('rank-notes').value.trim();
-    const phase1Rankings = Object.fromEntries(PLANS.map((p, i) => [p, sels[i].value]));
-    const tied1 = new Set(sels.map(s => s.value)).size < 3;
+    const notes  = document.getElementById('rank-notes').value.trim();
+    const phase1Rankings = Object.fromEntries(PLANS.map((p, i) => [p, rankSels[i].value]));
+    const phase1Likert   = Object.fromEntries(PLANS.map((p, i) => [p, likertSels[i].value]));
+    const tied1 = new Set(rankSels.map(s => s.value)).size < 3;
 
     const result = {
       site: S.currentSite,
       subject: S.currentSubject,
       reviewer,
       rankings_phase1: phase1Rankings,
+      likert_phase1:   phase1Likert,
       tied_phase1: tied1,
       notes_phase1: notes || null,
-      // Phase 2 fields added after the reveal dialog
+      // Phase 2 fields filled in by phase 2 submit / skip
       rankings_phase2: null,
+      likert_phase2:   null,
       tied_phase2: null,
       notes_phase2: null,
       phase2_changed: false,
       timestamp: new Date().toISOString(),
     };
 
-    // Save Phase 1 ranking immediately
     try {
       await DataLoader.saveRanking(result);
-      stat.textContent = 'Phase 1 submitted — see plan details...';
-      stat.style.color = 'var(--green)';
-      btn.disabled = true;
-      // Mark phase 1 complete in local status cache and refresh dot
       S.rankingStatus[S.currentSubject] = {
         ...(S.rankingStatus[S.currentSubject] || {}),
         phase1: true,
       };
       updateSubjectStatus(S.currentSubject);
     } catch (e) {
+      // Server unreachable — fall back to client download so reviewer's data
+      // is not lost. They can email this file to the study coordinator.
       const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
       const a = Object.assign(document.createElement('a'), {
         href: URL.createObjectURL(blob),
@@ -1774,149 +1991,27 @@ function initRanking() {
       URL.revokeObjectURL(a.href);
     }
 
-    // Phase 2: reveal plan parameters and allow re-ranking
-    openRerankDialog(result, phase1Rankings, stat);
-  });
-}
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Post-Submit Re-Rank Dialog (Phase 2)
-// ─────────────────────────────────────────────────────────────────────────────
-function openRerankDialog(resultBase, phase1Rankings, statEl) {
-  const modal = document.getElementById('rerank-modal');
-  const content = document.getElementById('rerank-content');
-
-  // Build the plan parameters table
-  const pp = S.planParams || {};
-  const fmtTime = (s) => {
-    if (s == null) return '—';
-    const m = Math.floor(s / 60);
-    const sec = Math.round(s % 60);
-    return `${m}:${String(sec).padStart(2, '0')} (${(s/60).toFixed(1)} min)`;
-  };
-  const fmtLimit = (p) => {
-    if (!p || !p.limitingBreakdown) return '—';
-    const lb = p.limitingBreakdown;
-    const parts = [];
-    if (lb.mu_pct > 1)     parts.push(`MU ${lb.mu_pct.toFixed(0)}%`);
-    if (lb.gantry_pct > 1) parts.push(`Gantry ${lb.gantry_pct.toFixed(0)}%`);
-    if (lb.mlc_pct > 1)    parts.push(`MLC ${lb.mlc_pct.toFixed(0)}%`);
-    return parts.join(' / ');
-  };
-
-  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">';
-  html += '<thead><tr style="background:#2a2a2a">';
-  html += '<th style="padding:8px;text-align:left">Parameter</th>';
-  html += '<th style="padding:8px;color:var(--row-A)">Plan A</th>';
-  html += '<th style="padding:8px;color:var(--row-B)">Plan B</th>';
-  html += '<th style="padding:8px;color:var(--row-C)">Plan C</th>';
-  html += '</tr></thead><tbody>';
-
-  // Number of arcs intentionally omitted — institutional planning style can
-  // leak through arc count and bias the post-reveal re-ranking.
-  const rows = [
-    ['Your initial ranking',     p => phase1Rankings[p] ? `${phase1Rankings[p]}${ordinal(phase1Rankings[p])}` : '—'],
-    ['Total MU',                 p => pp[p] ? Math.round(pp[p].totalMU).toLocaleString() : '—'],
-    ['Est. delivery time',       p => pp[p] ? fmtTime(pp[p].deliveryTimeS) : '—'],
-    ['Speed-limiting factor',    p => pp[p] ? fmtLimit(pp[p]) : '—'],
-  ];
-
-  rows.forEach(([label, fn]) => {
-    html += `<tr style="border-bottom:1px solid #2a2a2a"><td style="padding:6px 8px;color:var(--text-dim)">${label}</td>`;
-    PLANS.forEach(p => {
-      html += `<td style="padding:6px 8px;text-align:center">${fn(p)}</td>`;
-    });
-    html += '</tr>';
-  });
-
-  html += '</tbody></table>';
-
-  // Re-ranking dropdowns (pre-populated with phase 1 values)
-  html += '<div style="background:#1a1a2e;border:1px solid #2a3a5e;border-radius:6px;padding:12px;margin-bottom:8px">';
-  html += '<div style="font-weight:600;margin-bottom:10px;font-size:13px">Revised Ranking</div>';
-  html += '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">';
-
-  PLANS.forEach(p => {
-    const val = phase1Rankings[p] || '';
-    html += `<div style="display:flex;align-items:center;gap:6px">`;
-    html += `<span style="color:var(--row-${p});font-weight:700">Plan ${p}</span>`;
-    html += `<select class="rank-sel rerank-sel" id="rerank-${p}" data-plan="${p}">`;
-    html += `<option value="">—</option>`;
-    html += `<option value="1"${val==='1'?' selected':''}>1st</option>`;
-    html += `<option value="2"${val==='2'?' selected':''}>2nd</option>`;
-    html += `<option value="3"${val==='3'?' selected':''}>3rd</option>`;
-    html += `</select></div>`;
-  });
-
-  html += '</div>';
-  html += '<div style="margin-top:10px">';
-  html += '<input type="text" id="rerank-notes" placeholder="Optional notes for revised ranking..." style="width:100%;padding:6px 10px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">';
-  html += '</div>';
-  html += '<div id="rerank-status" style="margin-top:6px;font-size:11px;color:var(--text-dim);min-height:16px"></div>';
-  html += '</div>';
-
-  content.innerHTML = html;
-  modal.classList.remove('hidden');
-
-  const rerankSels = PLANS.map(p => document.getElementById(`rerank-${p}`));
-  const rerankStatus = document.getElementById('rerank-status');
-  const submitBtn = document.getElementById('rerank-submit');
-  const skipBtn = document.getElementById('rerank-skip');
-
-  function validateRerank() {
-    const vals = rerankSels.map(s => s.value).filter(Boolean);
-    const hasFirst = vals.includes('1');
-    const allFilled = vals.length === 3;
-
-    if (!allFilled) {
-      rerankStatus.textContent = 'All 3 plans must be ranked.';
-      rerankStatus.style.color = 'var(--yellow)';
-      submitBtn.disabled = true;
-    } else if (!hasFirst) {
-      rerankStatus.textContent = 'At least one plan must be ranked 1st.';
-      rerankStatus.style.color = 'var(--red)';
-      submitBtn.disabled = true;
-    } else {
-      rerankStatus.textContent = 'Ready.';
-      rerankStatus.style.color = 'var(--green)';
-      submitBtn.disabled = false;
-    }
+    // Transition to phase 2 in the open workspace
+    RankWorkspace.transitionToPhase2(result, phase1Rankings, phase1Likert);
   }
-  rerankSels.forEach(s => s.addEventListener('change', validateRerank));
-  validateRerank();
 
-  // Skip: phase 1 is already saved; save a phase2_skipped marker so reload
-  // shows green (both phases complete) rather than orange (phase 1 only).
-  skipBtn.onclick = async () => {
-    modal.classList.add('hidden');
-    statEl.textContent = 'Ranking submitted (no revision).';
-    statEl.style.color = 'var(--green)';
-    try {
-      await DataLoader.saveRanking({
-        ...resultBase,
-        phase2_skipped: true,
-        timestamp_phase2: new Date().toISOString(),
-      });
-    } catch (e) { console.warn('Could not save phase2 skip marker:', e); }
-    S.rankingStatus[S.currentSubject] = { phase1: true, phase2: true };
-    updateSubjectStatus(S.currentSubject);
-  };
+  async function submitPhase2(reviewer) {
+    const data = RankWorkspace._phase1Data;
+    if (!data) return;
 
-  // Submit phase 2
-  submitBtn.onclick = async () => {
-    const phase2Rankings = Object.fromEntries(
-      PLANS.map((p, i) => [p, rerankSels[i].value])
-    );
-    const tied2 = new Set(rerankSels.map(s => s.value)).size < 3;
-    const notes2 = document.getElementById('rerank-notes').value.trim();
+    const phase2Rankings = Object.fromEntries(PLANS.map((p, i) => [p, rankSels[i].value]));
+    const phase2Likert   = Object.fromEntries(PLANS.map((p, i) => [p, likertSels[i].value]));
+    const tied2 = new Set(rankSels.map(s => s.value)).size < 3;
+    const notes2 = document.getElementById('rank-notes').value.trim();
 
-    // Determine if rankings changed between phases
-    const changed = PLANS.some(p => phase1Rankings[p] !== phase2Rankings[p]);
+    const changed =
+      PLANS.some(p => data.rankings[p] !== phase2Rankings[p]) ||
+      PLANS.some(p => data.likert[p]   !== phase2Likert[p]);
 
     const finalResult = {
-      ...resultBase,
+      ...data.resultBase,
       rankings_phase2: phase2Rankings,
+      likert_phase2:   phase2Likert,
       tied_phase2: tied2,
       notes_phase2: notes2 || null,
       phase2_changed: changed,
@@ -1925,20 +2020,22 @@ function openRerankDialog(resultBase, phase1Rankings, statEl) {
 
     try {
       await DataLoader.saveRanking(finalResult);
-      statEl.textContent = changed ? 'Revised ranking submitted.' : 'Ranking confirmed (no change).';
-      statEl.style.color = 'var(--green)';
-      // Mark both phases complete in local cache and refresh dot
       S.rankingStatus[S.currentSubject] = { phase1: true, phase2: true };
       updateSubjectStatus(S.currentSubject);
+      RankWorkspace.markComplete();
     } catch (e) {
-      statEl.textContent = 'Save failed — see console.';
-      statEl.style.color = 'var(--red)';
+      stat.textContent = 'Save failed — see console.';
+      stat.style.color = 'var(--red)';
       console.error(e);
     }
-
-    modal.classList.add('hidden');
-  };
+  }
 }
+
+
+// Old modal-based phase 2 dialog (openRerankDialog) was removed — phase 2 is
+// now handled in-place by RankWorkspace.transitionToPhase2(). The
+// #rerank-modal HTML element is still present in index.html but no longer
+// referenced; safe to remove in a future cleanup pass.
 
 function ordinal(n) {
   const s = String(n);
@@ -2383,13 +2480,8 @@ async function initNavigation() {
       renderClinicalGoals();
       renderClinicalContext();
 
-      // Reset ranking UI
-      PLANS.forEach(p => { document.getElementById(`rank-${p}`).value = ''; });
-      document.getElementById('submit-btn').disabled = true;
-      document.getElementById('rank-status').textContent = '';
-      document.getElementById('rank-notes').value = '';
-      document.getElementById('tie-confirm').checked = false;
-      document.getElementById('tie-confirm-wrap').style.display = 'none';
+      // Reset ranking workspace + carrot for the newly loaded subject
+      RankWorkspace.reset();
 
       // Render after layout settles
       setTimeout(() => Renderer.renderAll(), 100);

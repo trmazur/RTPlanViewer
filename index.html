@@ -452,28 +452,163 @@
     .dvh-legend-item { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; }
     .dvh-legend-sw { width: 10px; height: 3px; flex-shrink: 0; }
 
-    /* ── Ranking bar ── */
-    #rankbar {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 10px 14px;
-      padding: 10px 16px;
-      background: #111;
-      border-top: 2px solid var(--accent);
+    /* ── Ranking carrot (persistent thin strip) ── */
+    #rank-carrot {
       flex-shrink: 0;
-      box-shadow: 0 -3px 16px rgba(74,158,255,0.1);
-    }
-    #rankbar h3 {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      height: 36px;
+      background: linear-gradient(180deg, #0d0d0d 0%, #1a1a1a 100%);
+      border-top: 2px solid var(--accent);
+      color: var(--text);
       font-size: 12px;
       font-weight: 700;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s, border-color 0.15s;
+      box-shadow: 0 -3px 16px rgba(74,158,255,0.12);
+    }
+    #rank-carrot:hover { background: linear-gradient(180deg, #142436 0%, #1a2a3a 100%); }
+    #rank-carrot.complete {
+      border-top-color: var(--green);
+      background: linear-gradient(180deg, #0d1f14 0%, #142a1c 100%);
+      cursor: default;
+      box-shadow: none;
+    }
+    #rank-carrot.complete:hover { background: linear-gradient(180deg, #0d1f14 0%, #142a1c 100%); }
+    #rank-carrot-icon { font-size: 12px; color: var(--accent); transition: transform 0.2s; }
+    #rank-carrot.complete #rank-carrot-icon { color: var(--green); }
+    #rank-carrot-text { white-space: nowrap; }
+    #rank-carrot-status { font-size: 11px; color: var(--text-dim); font-weight: 500; margin-left: 12px; }
+
+    /* ── Ranking overlay workspace ── */
+    #rank-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      pointer-events: none;
+    }
+    #rank-overlay.hidden { display: none; }
+    #rank-overlay-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      pointer-events: auto;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+    #rank-panel {
+      position: relative;
+      pointer-events: auto;
+      background: var(--panel);
+      border-top: 3px solid var(--accent);
+      box-shadow: 0 -10px 40px rgba(0,0,0,0.7);
+      max-height: 75vh;
+      display: flex;
+      flex-direction: column;
+      animation: slideUp 0.25s ease;
+      transition: max-height 0.3s ease;
+    }
+    #rank-panel.phase2 { max-height: 90vh; border-top-color: var(--yellow); }
+    #rank-panel-header {
+      padding: 14px 22px;
+      background: #181818;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+    }
+    #rank-panel-title {
+      font-size: 15px;
+      font-weight: 700;
       color: var(--text);
-      white-space: nowrap;
-      letter-spacing: 0.3px;
+      flex-shrink: 0;
+    }
+    #rank-panel.phase2 #rank-panel-title { color: var(--yellow); }
+    #rank-panel-subtitle {
+      flex: 1;
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+    #rank-panel-close {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 22px;
+      cursor: pointer;
+      padding: 0 6px;
+      line-height: 1;
+    }
+    #rank-panel-close:hover { color: var(--text); }
+    #rank-panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 22px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .rank-section-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
     }
 
-    .rank-group { display: flex; align-items: center; gap: 8px; }
-    .rank-lbl { font-size: 13px; font-weight: 700; min-width: 52px; }
+    /* Plan-detail reveal block (phase 2) */
+    #rank-details-pane.hidden { display: none; }
+    #rank-details-content table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    #rank-details-content thead tr { background: #2a2a2a; }
+    #rank-details-content th { padding: 8px; text-align: left; }
+    #rank-details-content td { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; text-align: center; }
+    #rank-details-content td:first-child { text-align: left; color: var(--text-dim); }
+
+    /* Ranking + Likert form table */
+    .rank-form-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .rank-form-tbl thead tr { background: #2a2a2a; }
+    .rank-form-tbl th {
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .rank-form-tbl td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #2a2a2a;
+      vertical-align: middle;
+    }
+    .rank-help {
+      display: inline-block;
+      margin-left: 6px;
+      color: var(--accent);
+      cursor: help;
+      font-size: 13px;
+    }
+    .rank-lbl {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
     .rank-lbl-A { color: var(--row-A); }
     .rank-lbl-B { color: var(--row-B); }
     .rank-lbl-C { color: var(--row-C); }
@@ -483,18 +618,41 @@
       border: 1px solid #555;
       border-radius: 4px;
       color: var(--text);
-      padding: 5px 10px;
+      padding: 6px 10px;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       min-width: 80px;
     }
+    .rank-sel.likert-sel { min-width: 220px; font-weight: 500; }
     .rank-sel:focus { outline: 2px solid var(--accent); }
 
     #rank-status { font-size: 12px; color: var(--text-dim); }
 
+    #rank-panel-footer {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0 6px;
+      margin-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+
+    #rank-skip-btn {
+      padding: 7px 18px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #rank-skip-btn:hover { border-color: var(--accent); color: var(--accent); }
+    #rank-skip-btn.hidden { display: none; }
+
     #submit-btn {
-      padding: 7px 22px;
+      padding: 8px 24px;
       background: var(--green);
       border: none;
       border-radius: 5px;
@@ -1004,50 +1162,137 @@
 
     </div>
 
-    <!-- Ranking bar -->
-    <div id="rankbar">
-      <h3>Rank:</h3>
-      <div class="rank-group">
-        <span class="rank-lbl rank-lbl-A">Plan A</span>
-        <select class="rank-sel" id="rank-A">
-          <option value="">—</option>
-          <option value="1">1st</option>
-          <option value="2">2nd</option>
-          <option value="3">3rd</option>
-        </select>
+    <!-- Ranking carrot — persistent thin strip at bottom of viewport.
+         Click to expand the ranking + Likert workspace as an overlay. -->
+    <div id="rank-carrot" title="Click to enter ranking and quality scores">
+      <span id="rank-carrot-icon">&#x25B2;</span>
+      <span id="rank-carrot-text">Submit ranking &amp; plan-quality scores</span>
+      <span id="rank-carrot-status"></span>
+    </div>
+
+    <!-- Ranking workspace overlay — slides up from bottom over the views. -->
+    <div id="rank-overlay" class="hidden">
+      <div id="rank-overlay-backdrop"></div>
+      <div id="rank-panel">
+        <div id="rank-panel-header">
+          <h3 id="rank-panel-title">Phase 1 — Rank plans by dose</h3>
+          <span id="rank-panel-subtitle">Provide your ranking and plan-quality score for each plan, based on the dose distributions shown.</span>
+          <button id="rank-panel-close" title="Close (does not discard saved phase 1)">&times;</button>
+        </div>
+
+        <div id="rank-panel-body">
+
+          <!-- Phase 2 only: plan-detail reveal table appears here -->
+          <div id="rank-details-pane" class="hidden">
+            <div class="rank-section-label">Plan Delivery Parameters (revealed)</div>
+            <div id="rank-details-content"></div>
+          </div>
+
+          <!-- Ranking + Likert grid (used by both phases) -->
+          <div id="rank-form-pane">
+            <div class="rank-section-label" id="rank-form-section-label">Your assessment</div>
+            <table class="rank-form-tbl">
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Rank</th>
+                  <th>Plan Quality
+                    <span class="rank-help" title="1 = Reject&#10;2 = Major revision needed&#10;3 = Minor revision needed&#10;4 = Acceptable as-is&#10;5 = Excellent">&#9432;</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="rank-lbl rank-lbl-A">Plan A</span></td>
+                  <td>
+                    <select class="rank-sel" id="rank-A">
+                      <option value="">—</option>
+                      <option value="1">1st</option>
+                      <option value="2">2nd</option>
+                      <option value="3">3rd</option>
+                    </select>
+                  </td>
+                  <td>
+                    <select class="rank-sel likert-sel" id="likert-A">
+                      <option value="">—</option>
+                      <option value="1">1 — Reject</option>
+                      <option value="2">2 — Major revision needed</option>
+                      <option value="3">3 — Minor revision needed</option>
+                      <option value="4">4 — Acceptable as-is</option>
+                      <option value="5">5 — Excellent</option>
+                    </select>
+                  </td>
+                </tr>
+                <tr>
+                  <td><span class="rank-lbl rank-lbl-B">Plan B</span></td>
+                  <td>
+                    <select class="rank-sel" id="rank-B">
+                      <option value="">—</option>
+                      <option value="1">1st</option>
+                      <option value="2">2nd</option>
+                      <option value="3">3rd</option>
+                    </select>
+                  </td>
+                  <td>
+                    <select class="rank-sel likert-sel" id="likert-B">
+                      <option value="">—</option>
+                      <option value="1">1 — Reject</option>
+                      <option value="2">2 — Major revision needed</option>
+                      <option value="3">3 — Minor revision needed</option>
+                      <option value="4">4 — Acceptable as-is</option>
+                      <option value="5">5 — Excellent</option>
+                    </select>
+                  </td>
+                </tr>
+                <tr>
+                  <td><span class="rank-lbl rank-lbl-C">Plan C</span></td>
+                  <td>
+                    <select class="rank-sel" id="rank-C">
+                      <option value="">—</option>
+                      <option value="1">1st</option>
+                      <option value="2">2nd</option>
+                      <option value="3">3rd</option>
+                    </select>
+                  </td>
+                  <td>
+                    <select class="rank-sel likert-sel" id="likert-C">
+                      <option value="">—</option>
+                      <option value="1">1 — Reject</option>
+                      <option value="2">2 — Major revision needed</option>
+                      <option value="3">3 — Minor revision needed</option>
+                      <option value="4">4 — Acceptable as-is</option>
+                      <option value="5">5 — Excellent</option>
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <label id="tie-confirm-wrap" class="ctrl-row" style="display:none;margin:8px 0 0">
+              <input type="checkbox" id="tie-confirm">
+              <span style="font-size:12px;color:var(--yellow)">Confirm tied rankings</span>
+            </label>
+
+            <div style="margin-top:10px">
+              <input type="text" id="rank-notes" placeholder="Optional notes..." style="width:100%;padding:6px 10px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">
+            </div>
+
+            <div id="rank-panel-footer">
+              <span id="rank-status"></span>
+              <div style="flex:1"></div>
+              <button id="rank-skip-btn" class="hidden">Keep original ranking</button>
+              <button id="submit-btn" disabled>Submit Phase 1</button>
+            </div>
+          </div>
+
+        </div>
       </div>
-      <div class="rank-group">
-        <span class="rank-lbl rank-lbl-B">Plan B</span>
-        <select class="rank-sel" id="rank-B">
-          <option value="">—</option>
-          <option value="1">1st</option>
-          <option value="2">2nd</option>
-          <option value="3">3rd</option>
-        </select>
-      </div>
-      <div class="rank-group">
-        <span class="rank-lbl rank-lbl-C">Plan C</span>
-        <select class="rank-sel" id="rank-C">
-          <option value="">—</option>
-          <option value="1">1st</option>
-          <option value="2">2nd</option>
-          <option value="3">3rd</option>
-        </select>
-      </div>
-      <span id="rank-status"></span>
-      <label id="tie-confirm-wrap" class="ctrl-row" style="display:none;margin:0">
-        <input type="checkbox" id="tie-confirm">
-        <span style="font-size:11px;color:var(--yellow)">Confirm tied rankings</span>
-      </label>
-      <div style="flex:1"></div>
-      <input type="text" id="rank-notes" placeholder="Optional notes..." style="width:200px;padding:4px 8px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">
-      <button id="submit-btn" disabled>Submit Ranking</button>
     </div>
 
   </div>
 
 </div>
 
-<script src="viewer.js?v=20260414d"></script>
+<script src="viewer.js?v=20260427a"></script>
 </body>
 </html>
