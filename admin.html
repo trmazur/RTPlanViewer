@@ -2705,6 +2705,45 @@ document.getElementById('export-btn').addEventListener('click', async () => {
   App.log(logArea, 'Starting export...', 'log-info');
   App.setProgress('export-progress', 0);
 
+  // Re-import guard: bail out *before* any upload work if the subject is
+  // already processed on the server. Re-importing would re-randomize the
+  // A/B/C identity map and silently corrupt any existing rankings that
+  // were collected against the previous mapping. Re-imports must go
+  // through the management page (which archives rankings first).
+  const guardSite = App.siteConfig?.site || 'UNKNOWN';
+  const guardSubject = App.subjectPath;
+  try {
+    const guardResp = await fetch(
+      `/api/subject-exists?site=${encodeURIComponent(guardSite)}&subject=${encodeURIComponent(guardSubject)}`
+    );
+    if (guardResp.ok) {
+      const guardData = await guardResp.json();
+      if (guardData.exists) {
+        App.log(logArea,
+          `ERROR: Subject "${guardSubject}" is already processed for site "${guardSite}".`,
+          'log-err');
+        App.log(logArea,
+          'Delete this subject via the management page first to re-import. ' +
+          'This protects existing rankings, which would otherwise be silently ' +
+          'corrupted by a fresh A/B/C identity randomization.',
+          'log-err');
+        App.setProgress('export-progress', 0);
+        document.getElementById('export-progress').classList.add('hidden');
+        return;
+      }
+    } else {
+      App.log(logArea,
+        `Could not verify subject existence (HTTP ${guardResp.status}). Aborting for safety.`,
+        'log-err');
+      return;
+    }
+  } catch (e) {
+    App.log(logArea,
+      `Could not reach server to verify subject existence: ${e.message}. Aborting for safety.`,
+      'log-err');
+    return;
+  }
+
   // Build the manifest
   if (!App.prescriptionDose) {
     App.log(logArea, 'WARNING: No prescription dose configured. Set it above before exporting.', 'log-warn');
@@ -2837,7 +2876,15 @@ document.getElementById('export-btn').addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ site, subject, fileName, data: JSON.stringify(data), encoding: 'text' }),
     });
-    if (!resp.ok) throw new Error(`Upload failed: ${fileName} (${resp.status})`);
+    if (!resp.ok) {
+      // Surface the server's human-readable error message if available
+      // (e.g. the 409 re-import-guard message)
+      let detail = '';
+      try { detail = (await resp.json())?.error || ''; } catch (_) {}
+      throw new Error(detail
+        ? `Upload of ${fileName} rejected: ${detail}`
+        : `Upload failed: ${fileName} (HTTP ${resp.status})`);
+    }
     return await resp.json();
   }
 

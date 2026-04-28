@@ -72,6 +72,10 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             site = params.get('site', [''])[0]
             reviewer = params.get('reviewer', [''])[0]
             self._handle_ranking_status(site, reviewer)
+        elif path == '/api/subject-exists':
+            site = params.get('site', [''])[0]
+            subject = params.get('subject', [''])[0]
+            self._handle_subject_exists(site, subject)
         else:
             super().do_GET()
 
@@ -181,6 +185,30 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self._json_response({'exists': False})
 
+    def _handle_subject_exists(self, site, subject):
+        """Return whether a subject has already been processed (manifest.json present).
+
+        Used by the admin tool to gate re-imports. Re-importing an already-
+        processed subject would silently overwrite its files and re-randomize
+        the plan-letter identity map, silently corrupting any existing
+        rankings that were collected against the previous map. The admin
+        tool calls this endpoint up front and refuses to start an export if
+        the subject already exists; deletion (and ranking-archival) must go
+        through the management page first.
+
+        Response: { "exists": bool, "site": str, "subject": str,
+                    "manifestPath": str (only if exists) }
+        """
+        if not site or not subject:
+            self._json_response({'error': 'Missing site or subject'}, 400)
+            return
+        manifest_path = SITES_DIR / site / subject / '_processed' / 'manifest.json'
+        exists = manifest_path.exists()
+        resp = {'exists': exists, 'site': site, 'subject': subject}
+        if exists:
+            resp['manifestPath'] = str(manifest_path.relative_to(VIEWER_DIR))
+        self._json_response(resp)
+
     def _handle_ranking_status(self, site, reviewer):
         """Return per-subject phase completion status for a reviewer at a site.
 
@@ -259,6 +287,26 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
         # Create _processed directory
         processed_dir = SITES_DIR / site / subject / '_processed'
         processed_dir.mkdir(parents=True, exist_ok=True)
+
+        # Re-import guard: refuse to overwrite an existing manifest.json.
+        # The manifest is the canonical "subject is processed" marker and is
+        # uploaded first by the admin tool, so blocking it blocks the entire
+        # re-import. Defense-in-depth — the admin tool already checks via
+        # /api/subject-exists before starting, but this server-side guard
+        # protects against stale clients, concurrent admins, or anyone
+        # bypassing the client check.
+        # To re-import a subject, delete it via the management page first
+        # (which archives existing rankings with the original identity map).
+        if file_name == 'manifest.json':
+            target = processed_dir / 'manifest.json'
+            if target.exists():
+                self._json_response({
+                    'error': ('Subject already processed. Delete it via the '
+                              'management page first to re-import.'),
+                    'site': site,
+                    'subject': subject,
+                }, 409)
+                return
 
         # Handle subdirectories in fileName (e.g., "plan_A/dose.bin.gz")
         file_path = processed_dir / file_name
