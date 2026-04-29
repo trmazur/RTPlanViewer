@@ -29,6 +29,63 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 VIEWER_DIR = Path(__file__).resolve().parent
 SITES_DIR = VIEWER_DIR / 'SITES'
 RANKINGS_DIR = SITES_DIR / '_rankings'
+SUPER_USERS_FILE = VIEWER_DIR / '_super_users.json'
+
+
+# ── Super-user permissions ───────────────────────────────────────────────
+# Permission config lives in _super_users.json at the viewer root, structured
+# as { "<site>": [reviewer names], "*": [global super-users] }. A reviewer is
+# a super-user for a site if they appear in '*' or in that site's array.
+# Missing/unreadable file = no one is super (fail safe).
+
+def _load_super_users():
+    """Return the super-user permission map, or {} if unreadable."""
+    if not SUPER_USERS_FILE.exists():
+        return {}
+    try:
+        with open(SUPER_USERS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _is_super_user(reviewer, site=None):
+    """True if `reviewer` has super-user rights for `site` (or for any site
+    if site is None — used when listing across-site data)."""
+    if not reviewer:
+        return False
+    config = _load_super_users()
+    # Global super-users always pass
+    globals_list = config.get('*', [])
+    if isinstance(globals_list, list) and reviewer in globals_list:
+        return True
+    if site is None:
+        # Any site: check membership in any per-site list
+        for k, v in config.items():
+            if k.startswith('_') or k == '*':
+                continue
+            if isinstance(v, list) and reviewer in v:
+                return True
+        return False
+    site_list = config.get(site, [])
+    return isinstance(site_list, list) and reviewer in site_list
+
+
+def _accessible_sites(reviewer):
+    """Return the set of site names this super-user can access, or None for
+    global access (all sites). Empty set = no access."""
+    config = _load_super_users()
+    globals_list = config.get('*', [])
+    if isinstance(globals_list, list) and reviewer in globals_list:
+        return None  # all sites
+    sites = set()
+    for k, v in config.items():
+        if k.startswith('_') or k == '*':
+            continue
+        if isinstance(v, list) and reviewer in v:
+            sites.add(k)
+    return sites
 
 
 class ViewerHandler(http.server.SimpleHTTPRequestHandler):
@@ -76,6 +133,17 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             site = params.get('site', [''])[0]
             subject = params.get('subject', [''])[0]
             self._handle_subject_exists(site, subject)
+        elif path == '/api/admin/super-users':
+            self._handle_admin_super_users()
+        elif path == '/api/admin/subjects':
+            reviewer = params.get('reviewer', [''])[0]
+            self._handle_admin_list_subjects(reviewer)
+        elif path == '/api/admin/rankings':
+            reviewer = params.get('reviewer', [''])[0]
+            site_filter = params.get('site', [''])[0]
+            subject_filter = params.get('subject', [''])[0]
+            reviewer_filter = params.get('reviewerFilter', [''])[0]
+            self._handle_admin_list_rankings(reviewer, site_filter, subject_filter, reviewer_filter)
         else:
             super().do_GET()
 
@@ -208,6 +276,151 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
         if exists:
             resp['manifestPath'] = str(manifest_path.relative_to(VIEWER_DIR))
         self._json_response(resp)
+
+    # ── API: Management page (super-user only) ──────────────────────────
+
+    def _handle_admin_super_users(self):
+        """Return the super-user config so the management page can show or
+        hide its UI based on the current reviewer. The page itself doesn't
+        enforce — every destructive endpoint re-checks server-side."""
+        self._json_response(_load_super_users())
+
+    def _handle_admin_list_subjects(self, reviewer):
+        """List processed subjects the super-user can see, with metadata.
+
+        Returns one entry per subject directory that has a manifest.json,
+        filtered by the reviewer's site permissions. Each entry includes
+        plan list, processed-at timestamp, ranking count, and total disk
+        size — enough to populate a management table without further calls.
+        """
+        if not _is_super_user(reviewer):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+
+        accessible = _accessible_sites(reviewer)  # None = global
+        subjects = []
+
+        if SITES_DIR.exists():
+            for site_dir in sorted(SITES_DIR.iterdir()):
+                if not site_dir.is_dir() or site_dir.name.startswith('_'):
+                    continue
+                site = site_dir.name
+                if accessible is not None and site not in accessible:
+                    continue
+                for subj_dir in sorted(site_dir.iterdir()):
+                    if not subj_dir.is_dir() or subj_dir.name.startswith('_'):
+                        continue
+                    manifest_path = subj_dir / '_processed' / 'manifest.json'
+                    if not manifest_path.exists():
+                        continue
+
+                    try:
+                        with open(manifest_path, 'r', encoding='utf-8') as f:
+                            m = json.load(f)
+                    except Exception:
+                        continue
+
+                    # Plan list — prefer explicit field, fall back to identityMap
+                    plans = m.get('plans')
+                    if not plans:
+                        identity_map = m.get('identityMap') or {}
+                        plans = sorted(set(identity_map.values()))
+                    if not plans:
+                        plans = ['A', 'B', 'C']
+
+                    # Total bytes in _processed/ (recursive)
+                    total_size = 0
+                    try:
+                        for f in (subj_dir / '_processed').rglob('*'):
+                            if f.is_file():
+                                total_size += f.stat().st_size
+                    except Exception:
+                        pass
+
+                    subjects.append({
+                        'site': site,
+                        'subject': subj_dir.name,
+                        'plans': plans,
+                        'numPlans': len(plans),
+                        'processedAt': m.get('validatedAt'),
+                        'rankingCount': self._count_rankings_for(site, subj_dir.name),
+                        'totalSizeMB': round(total_size / 1024 / 1024, 2),
+                    })
+
+        self._json_response({
+            'subjects': subjects,
+            'accessibleSites': sorted(accessible) if accessible is not None else None,  # None = global
+        })
+
+    def _handle_admin_list_rankings(self, reviewer, site_filter, subject_filter, reviewer_filter):
+        """List rankings the super-user can see, with optional filters by
+        site / subject / reviewer-being-listed.
+
+        Note: `reviewer` is the *requestor* (used for the auth check).
+        `reviewer_filter` is the reviewer-name filter applied to the list
+        contents. Two different concepts — they happen to use similar names.
+        """
+        if not _is_super_user(reviewer):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+
+        accessible = _accessible_sites(reviewer)
+        rankings = []
+
+        if RANKINGS_DIR.exists():
+            # Non-recursive glob — skips _archived/ subdirectory
+            for rfile in sorted(RANKINGS_DIR.glob('*.json')):
+                try:
+                    with open(rfile, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
+
+                site = data.get('site', '')
+                subject = data.get('subject', '')
+                rname = data.get('reviewer', '')
+
+                if accessible is not None and site not in accessible:
+                    continue
+                if site_filter and site != site_filter:
+                    continue
+                if subject_filter and subject != subject_filter:
+                    continue
+                if reviewer_filter and rname != reviewer_filter:
+                    continue
+
+                rankings.append({
+                    'site': site,
+                    'subject': subject,
+                    'reviewer': rname,
+                    'phase1Complete': bool(data.get('rankings_phase1')),
+                    'phase2Complete': (bool(data.get('rankings_phase2')) or
+                                       bool(data.get('phase2_skipped'))),
+                    'phase2Skipped': bool(data.get('phase2_skipped')),
+                    'timestamp': data.get('timestamp'),
+                    'timestampPhase2': data.get('timestamp_phase2'),
+                    'numPlans': data.get('numPlans'),
+                    'filename': rfile.name,
+                })
+
+        self._json_response({'rankings': rankings})
+
+    def _count_rankings_for(self, site, subject):
+        """Count how many ranking files reference a given (site, subject).
+        Reads JSON content rather than parsing filename to handle names
+        containing underscores."""
+        if not RANKINGS_DIR.exists():
+            return 0
+        count = 0
+        for rfile in RANKINGS_DIR.glob('*.json'):
+            try:
+                with open(rfile, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                if d.get('site') == site and d.get('subject') == subject:
+                    count += 1
+            except Exception:
+                pass
+        return count
 
     def _handle_ranking_status(self, site, reviewer):
         """Return per-subject phase completion status for a reviewer at a site.
