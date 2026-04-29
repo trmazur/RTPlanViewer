@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RT Plan Management</title>
+  <style>
+    /* Dark theme — mirrors viewer.js's variables for visual consistency */
+    :root {
+      --bg: #111;
+      --panel: #1e1e1e;
+      --panel2: #242424;
+      --border: #333;
+      --accent: #4a9eff;
+      --text: #e0e0e0;
+      --text-dim: #777;
+      --green: #44cc77;
+      --red: #ff5544;
+      --yellow: #ffcc44;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .hidden { display: none !important; }
+
+    /* ── Auth gate ── */
+    #gate-screen {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(ellipse at center, #1a1a1a 0%, #0a0a0a 70%);
+    }
+    .gate-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 32px 40px;
+      max-width: 460px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    .gate-card h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+    .gate-card p { color: var(--text-dim); font-size: 13px; line-height: 1.5; margin-bottom: 18px; }
+    .gate-card input {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .gate-card input:focus { outline: 2px solid var(--accent); }
+    .gate-card button {
+      width: 100%;
+      padding: 10px 18px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .gate-card button:hover:not(:disabled) { background: #3b8be8; }
+    .gate-card button:disabled { opacity: 0.4; cursor: default; }
+    #gate-status { margin-top: 10px; font-size: 12px; min-height: 18px; }
+    .gate-warning {
+      background: #2a2010;
+      border: 1px solid var(--yellow);
+      color: var(--yellow);
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    /* ── Top bar (post-auth) ── */
+    #topbar {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      background: #0d0d0d;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #topbar h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+    #topbar h1 .super-mark {
+      color: var(--yellow);
+      font-weight: 700;
+      margin-left: 8px;
+      font-size: 11px;
+      letter-spacing: 1px;
+      padding: 2px 8px;
+      border: 1px solid var(--yellow);
+      border-radius: 3px;
+    }
+    .top-label { font-size: 11px; color: var(--text-dim); }
+    .top-value { font-size: 12px; color: var(--text); font-weight: 600; }
+    .top-btn {
+      padding: 5px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .top-btn:hover { border-color: var(--accent); color: var(--accent); }
+    #scope-pill {
+      font-size: 10px;
+      padding: 3px 9px;
+      border-radius: 11px;
+      background: rgba(74,158,255,0.12);
+      color: var(--accent);
+      font-weight: 600;
+      letter-spacing: 0.4px;
+    }
+    #scope-pill.global { background: rgba(255,204,68,0.15); color: var(--yellow); border: 1px solid rgba(255,204,68,0.4); }
+
+    /* ── Tab nav ── */
+    #tab-nav {
+      display: flex;
+      gap: 0;
+      background: #0d0d0d;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      padding: 0 12px;
+    }
+    .tab-btn {
+      padding: 10px 18px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .tab-count {
+      display: inline-block;
+      background: var(--panel2);
+      color: var(--text-dim);
+      font-size: 10px;
+      padding: 1px 7px;
+      border-radius: 9px;
+      margin-left: 8px;
+      font-weight: 500;
+    }
+    .tab-btn.active .tab-count { background: rgba(74,158,255,0.18); color: var(--accent); }
+
+    /* ── Tab content ── */
+    #tab-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 20px;
+    }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    .placeholder {
+      color: var(--text-dim);
+      font-size: 13px;
+      padding: 40px;
+      text-align: center;
+      background: var(--panel);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+    }
+
+    /* ── Toast / status banner ── */
+    #toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-size: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+      z-index: 100;
+      max-width: 70vw;
+    }
+    #toast.toast-error { border-color: var(--red); color: var(--red); }
+    #toast.toast-success { border-color: var(--green); color: var(--green); }
+    #toast.hidden { display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Authorization gate — shown until reviewer name is verified as a super-user -->
+  <div id="gate-screen">
+    <div class="gate-card">
+      <h2>RT Plan Management</h2>
+      <p>This page is for super-users only. It allows deletion of processed subjects and reviewer rankings, with archive-on-delete and an audit log.</p>
+
+      <div class="gate-warning">
+        <strong>⚠ Heads up:</strong> Destructive operations on this page archive data
+        before deletion, but do not undo themselves. Use deliberately.
+      </div>
+
+      <input id="gate-name" placeholder="Your name (must match reviewers.json exactly)" autocomplete="off" />
+      <button id="gate-go" disabled>Continue</button>
+      <div id="gate-status"></div>
+    </div>
+  </div>
+
+  <!-- Main UI (post-auth) -->
+  <div id="main-ui" class="hidden" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+
+    <div id="topbar">
+      <h1>RT Plan Management <span class="super-mark">SUPER-USER</span></h1>
+      <div style="flex:1"></div>
+      <span class="top-label">Logged in as:</span>
+      <span class="top-value" id="user-name">—</span>
+      <span id="scope-pill" class="global">All sites</span>
+      <button class="top-btn" id="logout-btn" title="Switch to a different super-user">Switch user</button>
+      <a href="index.html" class="top-btn" style="text-decoration:none">← Viewer</a>
+    </div>
+
+    <div id="tab-nav">
+      <button class="tab-btn active" data-tab="subjects">
+        Processed Subjects <span class="tab-count" id="count-subjects">—</span>
+      </button>
+      <button class="tab-btn" data-tab="rankings">
+        Rankings <span class="tab-count" id="count-rankings">—</span>
+      </button>
+    </div>
+
+    <div id="tab-content">
+      <div id="tab-subjects" class="tab-pane active">
+        <div class="placeholder">
+          Processed-subjects table — populated in the next commit.<br>
+          The endpoints are already live; this view will show one row per subject with site, plan count, processed date, ranking count, and a checkbox column for bulk delete.
+        </div>
+      </div>
+      <div id="tab-rankings" class="tab-pane">
+        <div class="placeholder">
+          Rankings table — populated in the next commit.<br>
+          The endpoints are already live; this view will show one row per ranking with site/subject/reviewer, phase progress, and a checkbox column for bulk delete. Filter by subject and reviewer.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+
+  <script>
+  // ─────────────────────────────────────────────────────────────────────────
+  // Authorization
+  // ─────────────────────────────────────────────────────────────────────────
+  // The auth gate is a UX guard, not security. The server re-checks every
+  // destructive call against _super_users.json. Bypassing this client-side
+  // check via DevTools just lands the user at endpoints that return 403.
+  //
+  // Session lifetime: stored in sessionStorage so it survives reloads but
+  // not browser-tab close. No persistence across sessions.
+
+  const SESSION_KEY = 'rtv_super_user';
+
+  /**
+   * Look up the super-user config and return the access scope for `name`,
+   * or null if not authorized.
+   *   scope === '*'         → global (all sites)
+   *   scope === ['SITE',…]  → per-site access list
+   */
+  async function checkAuth(name) {
+    if (!name || !name.trim()) return null;
+    const resp = await fetch('/api/admin/super-users');
+    if (!resp.ok) return null;
+    const config = await resp.json();
+    if (!config || typeof config !== 'object') return null;
+
+    // Global access?
+    const globals = config['*'] || [];
+    if (Array.isArray(globals) && globals.includes(name)) {
+      return { name, scope: 'global', sites: null };
+    }
+    // Per-site access?
+    const sites = [];
+    for (const [key, users] of Object.entries(config)) {
+      if (key === '*' || key.startsWith('_')) continue;
+      if (Array.isArray(users) && users.includes(name)) sites.push(key);
+    }
+    if (sites.length > 0) return { name, scope: 'sites', sites };
+    return null;
+  }
+
+  function showToast(msg, kind = '') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = '';  // reset
+    if (kind) t.classList.add(`toast-${kind}`);
+    t.classList.remove('hidden');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.add('hidden'), 4000);
+  }
+
+  function enterApp(auth) {
+    document.getElementById('gate-screen').classList.add('hidden');
+    document.getElementById('main-ui').classList.remove('hidden');
+
+    document.getElementById('user-name').textContent = auth.name;
+
+    const pill = document.getElementById('scope-pill');
+    if (auth.scope === 'global') {
+      pill.textContent = 'All sites';
+      pill.classList.add('global');
+    } else {
+      pill.textContent = `Sites: ${auth.sites.join(', ')}`;
+      pill.classList.remove('global');
+    }
+
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(auth));
+    // Initial data load (placeholder for now; tabs will fetch in steps 5/6)
+    refreshAllCounts();
+  }
+
+  function logout() {
+    sessionStorage.removeItem(SESSION_KEY);
+    location.reload();  // fresh state
+  }
+
+  /** Fetch list endpoints just to drive the tab counters. The actual table
+   *  rendering arrives in the next commit. */
+  async function refreshAllCounts() {
+    const auth = currentAuth();
+    if (!auth) return;
+    try {
+      const [s, r] = await Promise.all([
+        fetch(`/api/admin/subjects?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.json()),
+        fetch(`/api/admin/rankings?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.json()),
+      ]);
+      document.getElementById('count-subjects').textContent = (s.subjects || []).length;
+      document.getElementById('count-rankings').textContent = (r.rankings || []).length;
+    } catch (e) {
+      console.warn('Count refresh failed:', e);
+    }
+  }
+
+  function currentAuth() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Wire-up
+  // ─────────────────────────────────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    // If the session already has a saved auth, validate it server-side
+    // (guards against stale sessionStorage if the super-user list changed)
+    const saved = currentAuth();
+    if (saved && saved.name) {
+      const fresh = await checkAuth(saved.name);
+      if (fresh) {
+        enterApp(fresh);
+        return;
+      }
+      // Stale auth — fall through to gate, clearing the session
+      sessionStorage.removeItem(SESSION_KEY);
+    }
+
+    // Gate input wiring
+    const nameInput = document.getElementById('gate-name');
+    const goBtn = document.getElementById('gate-go');
+    const status = document.getElementById('gate-status');
+
+    nameInput.addEventListener('input', () => {
+      goBtn.disabled = !nameInput.value.trim();
+      status.textContent = '';
+    });
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !goBtn.disabled) goBtn.click();
+    });
+
+    goBtn.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      goBtn.disabled = true;
+      status.textContent = 'Verifying…';
+      status.style.color = 'var(--text-dim)';
+      try {
+        const auth = await checkAuth(name);
+        if (auth) {
+          enterApp(auth);
+        } else {
+          status.textContent = 'Not authorized. This name is not on the super-user list.';
+          status.style.color = 'var(--red)';
+          goBtn.disabled = false;
+        }
+      } catch (e) {
+        status.textContent = `Could not reach server: ${e.message}`;
+        status.style.color = 'var(--red)';
+        goBtn.disabled = false;
+      }
+    });
+
+    nameInput.focus();
+
+    // Top bar wiring
+    document.getElementById('logout-btn').addEventListener('click', logout);
+
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+      });
+    });
+  });
+  </script>
+
+</body>
+</html>
