@@ -19,8 +19,11 @@ Then open http://localhost:8080 in your browser.
 import http.server
 import json
 import os
+import re
+import shutil
 import sys
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
@@ -86,6 +89,165 @@ def _accessible_sites(reviewer):
         if isinstance(v, list) and reviewer in v:
             sites.add(k)
     return sites
+
+
+# ── Delete / archive helpers ─────────────────────────────────────────────
+# All destructive admin actions go through these helpers so the
+# archive-on-delete + audit-log behavior is consistent.
+
+ADMIN_LOG_FILE = SITES_DIR / '_admin_log.json'
+RANKINGS_ARCHIVE_DIR = SITES_DIR / '_rankings' / '_archived'
+SUBJECTS_ARCHIVE_DIR = SITES_DIR / '_processed_archived'
+
+# Hard cap on number of items deletable in a single API call. Forces a
+# deliberate workflow and protects against accidental "select-all → delete".
+DELETE_BULK_CAP = 50
+
+# Per-plan small JSON files we DO archive when a subject is deleted. The
+# binary CT/dose volumes are intentionally NOT archived (regenerable from
+# DICOM source, and balloon archive size).
+PER_PLAN_ARCHIVE_FILES = (
+    'clinical_goals.json',
+    'plan_params.json',
+    'dose_meta.json',
+    'dvh.json',
+    'structures.json',
+)
+SUBJECT_ARCHIVE_TOPLEVEL = ('manifest.json', 'ct_meta.json')
+
+
+def _safe_timestamp_for_filename():
+    """ISO-like timestamp with no characters that are invalid in filenames
+    (Windows rejects ':' in paths). Sortable lexicographically."""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%SZ')
+
+
+_FILENAME_SAFE_RE = re.compile(r'[^A-Za-z0-9._-]')
+
+def _safe_filename_chunk(s):
+    """Sanitize a string for use as a filename component."""
+    return _FILENAME_SAFE_RE.sub('_', str(s))[:80]
+
+
+def _validate_site_subject(site, subject):
+    """Path-traversal guard. Returns (ok, error_message)."""
+    if not site or not subject:
+        return False, 'Missing site or subject'
+    bad = ('/', '\\', '..', '\x00', ':')
+    if any(b in site for b in bad):
+        return False, f'Invalid site name: {site!r}'
+    if any(b in subject for b in bad):
+        return False, f'Invalid subject name: {subject!r}'
+    return True, None
+
+
+def _find_ranking_file(site, subject, reviewer):
+    """Find a ranking file by JSON content, not filename. Returns Path or None.
+    Filenames substitute spaces for underscores, which makes parsing them
+    ambiguous when names already contain underscores."""
+    if not RANKINGS_DIR.exists():
+        return None
+    for f in RANKINGS_DIR.glob('*.json'):
+        try:
+            with open(f, 'r', encoding='utf-8') as fp:
+                data = json.load(fp)
+            if (data.get('site') == site and
+                    data.get('subject') == subject and
+                    data.get('reviewer') == reviewer):
+                return f
+        except Exception:
+            continue
+    return None
+
+
+def _archive_ranking(ranking_path, super_user, subject_still_processed):
+    """Archive a ranking file with metadata. Returns archive Path."""
+    RANKINGS_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(ranking_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    archived = {
+        '_archive_meta': {
+            'archived_at': datetime.now(timezone.utc).isoformat(),
+            'archived_by': super_user,
+            'original_filename': ranking_path.name,
+            'subject_still_processed': subject_still_processed,
+        },
+        'ranking': data,
+    }
+
+    site = _safe_filename_chunk(data.get('site', 'unknown'))
+    subject = _safe_filename_chunk(data.get('subject', 'unknown'))
+    reviewer = _safe_filename_chunk(data.get('reviewer', 'unknown'))
+    archive_name = f'{_safe_timestamp_for_filename()}_{site}_{subject}_{reviewer}.json'
+    archive_path = RANKINGS_ARCHIVE_DIR / archive_name
+
+    with open(archive_path, 'w', encoding='utf-8') as f:
+        json.dump(archived, f, indent=2)
+    return archive_path
+
+
+def _archive_subject(site, subject, super_user):
+    """Archive small text files from a subject's _processed/. Returns the
+    archive directory Path. Binary CT/dose volumes are NOT copied."""
+    src = SITES_DIR / site / subject / '_processed'
+    if not src.exists():
+        return None
+
+    SUBJECTS_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    archive_dir = SUBJECTS_ARCHIVE_DIR / (
+        f'{_safe_timestamp_for_filename()}_'
+        f'{_safe_filename_chunk(site)}_{_safe_filename_chunk(subject)}'
+    )
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    # Top-level small JSON files
+    for fname in SUBJECT_ARCHIVE_TOPLEVEL:
+        sf = src / fname
+        if sf.exists():
+            shutil.copy2(sf, archive_dir / fname)
+
+    # Per-plan small files; preserve plan_A/ plan_B/ ... structure
+    for plan_dir in src.iterdir():
+        if not plan_dir.is_dir() or not plan_dir.name.startswith('plan_'):
+            continue
+        plan_archive = archive_dir / plan_dir.name
+        plan_archive.mkdir(parents=True, exist_ok=True)
+        for fname in PER_PLAN_ARCHIVE_FILES:
+            sf = plan_dir / fname
+            if sf.exists():
+                shutil.copy2(sf, plan_archive / fname)
+
+    # Tombstone metadata
+    with open(archive_dir / '_delete_meta.json', 'w', encoding='utf-8') as f:
+        json.dump({
+            'deleted_at': datetime.now(timezone.utc).isoformat(),
+            'deleted_by': super_user,
+            'site': site,
+            'subject': subject,
+            'note': ('Binary CT/dose volumes not archived (regenerable from '
+                     'DICOM source). Small JSON metadata preserved here for '
+                     'audit traceability.'),
+        }, f, indent=2)
+
+    return archive_dir
+
+
+def _append_audit(entry):
+    """Append a single entry to the admin audit log (creates if missing)."""
+    SITES_DIR.mkdir(parents=True, exist_ok=True)
+    log = []
+    if ADMIN_LOG_FILE.exists():
+        try:
+            with open(ADMIN_LOG_FILE, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, list):
+                log = loaded
+        except Exception:
+            log = []  # corrupt log — start fresh; corrupt content stays on disk for forensics
+    log.append(entry)
+    with open(ADMIN_LOG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(log, f, indent=2)
 
 
 class ViewerHandler(http.server.SimpleHTTPRequestHandler):
@@ -158,6 +320,10 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_upload()
         elif parsed.path.startswith('/api/upload-binary/'):
             self._handle_upload_binary(parsed.path)
+        elif parsed.path == '/api/admin/delete-rankings':
+            self._handle_admin_delete_rankings()
+        elif parsed.path == '/api/admin/delete-subjects':
+            self._handle_admin_delete_subjects()
         else:
             self.send_error(404, 'Not found')
 
@@ -404,6 +570,202 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                 })
 
         self._json_response({'rankings': rankings})
+
+    def _handle_admin_delete_rankings(self):
+        """Delete one or more ranking files. Each is archived to
+        _rankings/_archived/ before removal, with original-filename and
+        super-user metadata. Audit log entry written per ranking.
+
+        Body: { "reviewer": "<super-user name>",
+                "rankings": [{site, subject, reviewer}, ...] }
+
+        Per-ranking authorization: super-user must have rights for that
+        site (not just any site). Mixed-site batches partially succeed —
+        per-item errors are returned alongside successes.
+
+        Response: { "deleted": [{site, subject, reviewer, archivePath}],
+                    "errors":  [{site, subject, reviewer, error}] }
+        """
+        try:
+            body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            data = json.loads(body)
+        except Exception:
+            self._json_response({'error': 'Invalid JSON body'}, 400)
+            return
+
+        super_user = data.get('reviewer', '')
+        items = data.get('rankings', [])
+
+        if not _is_super_user(super_user):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+        if not isinstance(items, list) or not items:
+            self._json_response({'error': '`rankings` must be a non-empty array'}, 400)
+            return
+        if len(items) > DELETE_BULK_CAP:
+            self._json_response(
+                {'error': f'Bulk-delete cap exceeded (max {DELETE_BULK_CAP} per request)'},
+                400)
+            return
+
+        deleted, errors = [], []
+        for item in items:
+            site = item.get('site', '')
+            subject = item.get('subject', '')
+            rname = item.get('reviewer', '')
+
+            ok, err = _validate_site_subject(site, subject)
+            if not ok:
+                errors.append({'site': site, 'subject': subject, 'reviewer': rname, 'error': err})
+                continue
+            if not _is_super_user(super_user, site):
+                errors.append({'site': site, 'subject': subject, 'reviewer': rname,
+                               'error': 'Not authorized for this site'})
+                continue
+
+            ranking_path = _find_ranking_file(site, subject, rname)
+            if not ranking_path:
+                errors.append({'site': site, 'subject': subject, 'reviewer': rname,
+                               'error': 'Ranking file not found'})
+                continue
+
+            manifest_path = SITES_DIR / site / subject / '_processed' / 'manifest.json'
+            still_processed = manifest_path.exists()
+
+            try:
+                archive_path = _archive_ranking(ranking_path, super_user, still_processed)
+                ranking_path.unlink()
+                rel_archive = str(archive_path.relative_to(VIEWER_DIR))
+                deleted.append({
+                    'site': site, 'subject': subject, 'reviewer': rname,
+                    'archivePath': rel_archive,
+                })
+                _append_audit({
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'super_user': super_user,
+                    'action': 'delete_ranking',
+                    'site': site, 'subject': subject, 'reviewer': rname,
+                    'archive_path': rel_archive,
+                    'subject_still_processed': still_processed,
+                })
+            except Exception as e:
+                errors.append({'site': site, 'subject': subject, 'reviewer': rname,
+                               'error': f'Delete failed: {e}'})
+
+        self._json_response({'deleted': deleted, 'errors': errors})
+
+    def _handle_admin_delete_subjects(self):
+        """Delete one or more processed subjects. Cascades to associated
+        rankings (archives them first). Each subject's small JSON metadata
+        is archived; binary CT/dose volumes are not (regenerable from
+        DICOM source). Only the `_processed/` directory is removed; any
+        sibling DICOM source folders under SITES/{site}/{subject}/ are
+        left in place so the subject can be re-imported from the same
+        source if desired.
+
+        Body: { "reviewer": "<super-user name>",
+                "subjects": [{site, subject}, ...],
+                "cascade": true }
+
+        Response: { "deleted": [{site, subject, archivePath, cascadedRankings: [...]}],
+                    "errors":  [{site, subject, error}] }
+        """
+        try:
+            body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            data = json.loads(body)
+        except Exception:
+            self._json_response({'error': 'Invalid JSON body'}, 400)
+            return
+
+        super_user = data.get('reviewer', '')
+        items = data.get('subjects', [])
+        cascade = bool(data.get('cascade', True))
+
+        if not _is_super_user(super_user):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+        if not isinstance(items, list) or not items:
+            self._json_response({'error': '`subjects` must be a non-empty array'}, 400)
+            return
+        if len(items) > DELETE_BULK_CAP:
+            self._json_response(
+                {'error': f'Bulk-delete cap exceeded (max {DELETE_BULK_CAP} per request)'},
+                400)
+            return
+
+        deleted, errors = [], []
+        for item in items:
+            site = item.get('site', '')
+            subject = item.get('subject', '')
+
+            ok, err = _validate_site_subject(site, subject)
+            if not ok:
+                errors.append({'site': site, 'subject': subject, 'error': err})
+                continue
+            if not _is_super_user(super_user, site):
+                errors.append({'site': site, 'subject': subject, 'error': 'Not authorized for this site'})
+                continue
+
+            processed_dir = SITES_DIR / site / subject / '_processed'
+            if not processed_dir.exists():
+                errors.append({'site': site, 'subject': subject, 'error': 'Subject not processed'})
+                continue
+
+            # 1. Cascade-archive rankings BEFORE archiving the subject (so
+            #    the rankings know subject_still_processed=False).
+            cascaded = []
+            if cascade and RANKINGS_DIR.exists():
+                for rfile in list(RANKINGS_DIR.glob('*.json')):
+                    try:
+                        with open(rfile, 'r', encoding='utf-8') as f:
+                            rdata = json.load(f)
+                        if rdata.get('site') == site and rdata.get('subject') == subject:
+                            arch = _archive_ranking(rfile, super_user,
+                                                    subject_still_processed=False)
+                            rfile.unlink()
+                            cascaded.append({
+                                'reviewer': rdata.get('reviewer', ''),
+                                'archivePath': str(arch.relative_to(VIEWER_DIR)),
+                            })
+                    except Exception:
+                        # Don't block subject delete on individual ranking errors
+                        pass
+
+            # 2. Archive subject metadata
+            try:
+                archive_dir = _archive_subject(site, subject, super_user)
+            except Exception as e:
+                errors.append({'site': site, 'subject': subject,
+                               'error': f'Archive failed: {e}'})
+                continue
+
+            # 3. Remove _processed/ directory tree (DICOM siblings preserved)
+            try:
+                shutil.rmtree(processed_dir)
+            except Exception as e:
+                errors.append({'site': site, 'subject': subject,
+                               'error': f'Delete failed: {e}'})
+                continue
+
+            rel_archive = str(archive_dir.relative_to(VIEWER_DIR)) if archive_dir else None
+            deleted.append({
+                'site': site,
+                'subject': subject,
+                'archivePath': rel_archive,
+                'cascadedRankings': cascaded,
+            })
+            _append_audit({
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'super_user': super_user,
+                'action': 'delete_subject',
+                'site': site,
+                'subject': subject,
+                'archive_path': rel_archive,
+                'cascade': cascade,
+                'cascaded_rankings': cascaded,
+            })
+
+        self._json_response({'deleted': deleted, 'errors': errors})
 
     def _count_rankings_for(self, site, subject):
         """Count how many ranking files reference a given (site, subject).
