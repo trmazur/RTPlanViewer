@@ -2447,6 +2447,40 @@ async function initNavigation() {
     if (currentSite && _refreshSubjectsAndStatus) {
       _refreshSubjectsAndStatus(currentSite);
     }
+    // Show the "Manage ↗" link only if the reviewer is a super-user.
+    // Failing closed (link stays hidden) on any error keeps non-super
+    // users from seeing the link by accident.
+    refreshManageLink(name);
+  }
+
+  /** Look up super-user status for `name` and show/hide the top-bar
+   *  "Manage" link accordingly. The management page itself re-checks
+   *  every destructive call server-side, so this is purely a UX helper.
+   */
+  async function refreshManageLink(name) {
+    const link = document.getElementById('manage-link');
+    if (!link) return;
+    if (!name) {
+      link.style.display = 'none';
+      return;
+    }
+    try {
+      const resp = await fetch('/api/admin/super-users');
+      if (!resp.ok) { link.style.display = 'none'; return; }
+      const config = await resp.json();
+      let isSuper = false;
+      if (Array.isArray(config['*']) && config['*'].includes(name)) {
+        isSuper = true;
+      } else {
+        for (const [key, users] of Object.entries(config)) {
+          if (key === '*' || key.startsWith('_')) continue;
+          if (Array.isArray(users) && users.includes(name)) { isSuper = true; break; }
+        }
+      }
+      link.style.display = isSuper ? '' : 'none';
+    } catch (_) {
+      link.style.display = 'none';
+    }
   }
 
   revGate.addEventListener('change', () => {

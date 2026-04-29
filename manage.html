@@ -455,6 +455,9 @@
       <button class="tab-btn" data-tab="rankings">
         Rankings <span class="tab-count" id="count-rankings">—</span>
       </button>
+      <button class="tab-btn" data-tab="audit">
+        Audit Log <span class="tab-count" id="count-audit">—</span>
+      </button>
     </div>
 
     <div id="tab-content">
@@ -519,6 +522,31 @@
             </tr>
           </thead>
           <tbody id="rkg-tbody"></tbody>
+        </table>
+      </div>
+
+      <div id="tab-audit" class="tab-pane">
+        <div class="toolbar">
+          <span class="top-label" style="text-transform:uppercase;letter-spacing:0.5px;font-size:11px;color:var(--text-dim)">
+            Read-only history of every destructive admin action.
+          </span>
+          <div style="flex:1"></div>
+          <span class="selection-count">Showing <strong id="audit-shown-count">0</strong> of <strong id="audit-total-count">0</strong></span>
+          <button class="btn" id="audit-refresh-btn">⟳ Refresh</button>
+        </div>
+        <table class="data-table" id="audit-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Action</th>
+              <th>Super-user</th>
+              <th>Site</th>
+              <th>Subject</th>
+              <th>Reviewer / Cascade</th>
+              <th>Archive</th>
+            </tr>
+          </thead>
+          <tbody id="audit-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -610,6 +638,7 @@
     // Wire up tab modules now that the auth context is established
     SubjectsTab.wireUp();
     RankingsTab.wireUp();
+    AuditLogTab.wireUp();
     // Initial load — populates active tab + drives tab counters
     SubjectsTab.load();
     refreshAllCounts();
@@ -627,12 +656,14 @@
     const auth = currentAuth();
     if (!auth) return;
     try {
-      const [s, r] = await Promise.all([
+      const [s, r, a] = await Promise.all([
         fetch(`/api/admin/subjects?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.json()),
         fetch(`/api/admin/rankings?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.json()),
+        fetch(`/api/admin/audit-log?reviewer=${encodeURIComponent(auth.name)}&limit=1`).then(r => r.json()),
       ]);
       document.getElementById('count-subjects').textContent = (s.subjects || []).length;
       document.getElementById('count-rankings').textContent = (r.rankings || []).length;
+      document.getElementById('count-audit').textContent = a.totalOnDisk || 0;
     } catch (e) {
       console.warn('Count refresh failed:', e);
     }
@@ -1118,6 +1149,90 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Audit Log Tab (read-only)
+  // ─────────────────────────────────────────────────────────────────────────
+  const AuditLogTab = {
+    rows: [],
+    totalOnDisk: 0,
+
+    async load() {
+      const auth = currentAuth();
+      if (!auth) return;
+      try {
+        const resp = await fetch(`/api/admin/audit-log?reviewer=${encodeURIComponent(auth.name)}&limit=200`);
+        if (!resp.ok) {
+          showToast(`Could not load audit log (HTTP ${resp.status})`, 'error');
+          return;
+        }
+        const data = await resp.json();
+        this.rows = data.entries || [];
+        this.totalOnDisk = data.totalOnDisk || 0;
+        this.render();
+      } catch (e) {
+        showToast(`Audit log load failed: ${e.message}`, 'error');
+      }
+    },
+
+    render() {
+      document.getElementById('count-audit').textContent = this.rows.length;
+      document.getElementById('audit-shown-count').textContent = this.rows.length;
+      document.getElementById('audit-total-count').textContent = this.totalOnDisk;
+
+      const tbody = document.getElementById('audit-tbody');
+      tbody.innerHTML = '';
+
+      if (this.rows.length === 0) {
+        const row = document.createElement('tr');
+        row.className = 'empty-row';
+        row.innerHTML = `<td colspan="7">No audit entries yet — destructive admin actions will appear here.</td>`;
+        tbody.appendChild(row);
+        return;
+      }
+
+      this.rows.forEach(entry => tbody.appendChild(this._renderRow(entry)));
+    },
+
+    _renderRow(e) {
+      const tr = document.createElement('tr');
+      const ts = e.timestamp ? new Date(e.timestamp).toLocaleString() : '—';
+      const actionLabel = e.action === 'delete_subject' ? 'Subject delete'
+                        : e.action === 'delete_ranking' ? 'Ranking delete'
+                        : (e.action || '—');
+      const actionColor = e.action === 'delete_subject' ? 'var(--red)' : 'var(--yellow)';
+
+      // For subject deletes, show cascade count rather than reviewer name
+      let revOrCascade = '—';
+      if (e.action === 'delete_ranking') {
+        revOrCascade = escapeHtml(e.reviewer || '—');
+      } else if (e.action === 'delete_subject') {
+        const n = (e.cascaded_rankings || []).length;
+        revOrCascade = n > 0
+          ? `<span title="${escapeHtml((e.cascaded_rankings || []).map(c => c.reviewer).join(', '))}">${n} ranking${n === 1 ? '' : 's'} cascaded</span>`
+          : '<span style="color:var(--text-dim)">no cascade</span>';
+      }
+
+      const archive = e.archive_path
+        ? `<code style="font-size:11px;color:var(--text-dim)" title="${escapeHtml(e.archive_path)}">${escapeHtml(e.archive_path.split(/[\\/]/).slice(-2).join('/'))}</code>`
+        : '—';
+
+      tr.innerHTML = `
+        <td title="${escapeHtml(e.timestamp || '')}">${ts}</td>
+        <td><strong style="color:${actionColor}">${actionLabel}</strong></td>
+        <td>${escapeHtml(e.super_user || '—')}</td>
+        <td>${escapeHtml(e.site || '—')}</td>
+        <td>${escapeHtml(e.subject || '—')}</td>
+        <td>${revOrCascade}</td>
+        <td>${archive}</td>
+      `;
+      return tr;
+    },
+
+    wireUp() {
+      document.getElementById('audit-refresh-btn').addEventListener('click', () => this.load());
+    },
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Wire-up
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1184,6 +1299,7 @@
         document.getElementById(`tab-${tab}`).classList.add('active');
         if (tab === 'subjects' && SubjectsTab.rows.length === 0) SubjectsTab.load();
         if (tab === 'rankings' && RankingsTab.rows.length === 0) RankingsTab.load();
+        if (tab === 'audit') AuditLogTab.load();  // always refresh — it's read-only and small
       });
     });
   });

@@ -306,6 +306,13 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             subject_filter = params.get('subject', [''])[0]
             reviewer_filter = params.get('reviewerFilter', [''])[0]
             self._handle_admin_list_rankings(reviewer, site_filter, subject_filter, reviewer_filter)
+        elif path == '/api/admin/audit-log':
+            reviewer = params.get('reviewer', [''])[0]
+            try:
+                limit = int(params.get('limit', ['200'])[0])
+            except (ValueError, TypeError):
+                limit = 200
+            self._handle_admin_audit_log(reviewer, limit)
         else:
             super().do_GET()
 
@@ -570,6 +577,57 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                 })
 
         self._json_response({'rankings': rankings})
+
+    def _handle_admin_audit_log(self, reviewer, limit):
+        """Return audit log entries the super-user is allowed to see, newest
+        first, capped at `limit` entries (default 200, max 1000).
+
+        Per-site super-users only see entries for their accessible sites;
+        global super-users see everything.
+        """
+        if not _is_super_user(reviewer):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+
+        # Sanitize limit
+        if limit < 1:
+            limit = 1
+        elif limit > 1000:
+            limit = 1000
+
+        accessible = _accessible_sites(reviewer)  # None = global
+        entries = []
+        if ADMIN_LOG_FILE.exists():
+            try:
+                with open(ADMIN_LOG_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    entries = loaded
+            except Exception:
+                entries = []
+
+        if accessible is not None:
+            entries = [e for e in entries if e.get('site') in accessible]
+
+        # Newest first, then cap
+        entries = list(reversed(entries))[:limit]
+
+        self._json_response({
+            'entries': entries,
+            'returned': len(entries),
+            'totalOnDisk': self._audit_total_count(),
+        })
+
+    def _audit_total_count(self):
+        """Cheap sanity number for the audit log size on disk (informational)."""
+        if not ADMIN_LOG_FILE.exists():
+            return 0
+        try:
+            with open(ADMIN_LOG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return len(data) if isinstance(data, list) else 0
+        except Exception:
+            return 0
 
     def _handle_admin_delete_rankings(self):
         """Delete one or more ranking files. Each is archived to
