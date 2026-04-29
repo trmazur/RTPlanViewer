@@ -303,6 +303,18 @@
     }
     .badge-2 { background: rgba(255,153,68,0.15); color: var(--row-B, #ff9944); }
     .badge-3 { background: rgba(74,158,255,0.15); color: var(--accent); }
+    .phase-pill {
+      display: inline-block;
+      width: 18px; height: 18px;
+      line-height: 18px;
+      text-align: center;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .phase-pill.done    { background: rgba(68,204,119,0.18); color: var(--green); }
+    .phase-pill.missing { background: var(--panel2); color: var(--text-dim); }
+    .phase-pill.skipped { background: rgba(255,204,68,0.15); color: var(--yellow); }
     .row-link {
       color: var(--accent);
       text-decoration: none;
@@ -475,10 +487,39 @@
         </table>
       </div>
       <div id="tab-rankings" class="tab-pane">
-        <div class="placeholder">
-          Rankings table — populated in the next commit.<br>
-          The endpoints are already live; this view will show one row per ranking with site/subject/reviewer, phase progress, and a checkbox column for bulk delete. Filter by subject and reviewer.
+        <div class="toolbar">
+          <label for="rkg-site-filter">Site:</label>
+          <select id="rkg-site-filter">
+            <option value="">All</option>
+          </select>
+          <label for="rkg-subject-filter">Subject:</label>
+          <select id="rkg-subject-filter">
+            <option value="">All</option>
+          </select>
+          <label for="rkg-reviewer-filter">Reviewer:</label>
+          <select id="rkg-reviewer-filter">
+            <option value="">All</option>
+          </select>
+          <button class="btn" id="rkg-refresh-btn" title="Refresh from server">⟳ Refresh</button>
+          <span class="selection-count">Selected: <strong id="rkg-selected-count">0</strong></span>
+          <button class="btn btn-danger" id="rkg-delete-btn" disabled>Delete selected…</button>
         </div>
+        <table class="data-table" id="rkg-table">
+          <thead>
+            <tr>
+              <th class="col-cbx"><input type="checkbox" id="rkg-select-all" title="Select all visible" /></th>
+              <th>Site</th>
+              <th>Subject</th>
+              <th>Reviewer</th>
+              <th>Phase 1</th>
+              <th>Phase 2</th>
+              <th>Submitted</th>
+              <th>Plans</th>
+              <th class="col-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="rkg-tbody"></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -568,6 +609,7 @@
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(auth));
     // Wire up tab modules now that the auth context is established
     SubjectsTab.wireUp();
+    RankingsTab.wireUp();
     // Initial load — populates active tab + drives tab counters
     SubjectsTab.load();
     refreshAllCounts();
@@ -852,6 +894,222 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Rankings Tab
+  // ─────────────────────────────────────────────────────────────────────────
+  const RankingsTab = {
+    rows: [],
+    selected: new Set(),  // composite keys "site|subject|reviewer"
+
+    keyOf(row) { return `${row.site}|${row.subject}|${row.reviewer}`; },
+
+    async load() {
+      const auth = currentAuth();
+      if (!auth) return;
+      try {
+        const resp = await fetch(`/api/admin/rankings?reviewer=${encodeURIComponent(auth.name)}`);
+        if (!resp.ok) {
+          showToast(`Could not load rankings (HTTP ${resp.status})`, 'error');
+          return;
+        }
+        const data = await resp.json();
+        this.rows = data.rankings || [];
+        const valid = new Set(this.rows.map(r => this.keyOf(r)));
+        this.selected = new Set([...this.selected].filter(k => valid.has(k)));
+        this.render();
+      } catch (e) {
+        showToast(`Rankings load failed: ${e.message}`, 'error');
+      }
+    },
+
+    render() {
+      // Filter dropdowns — populate from current rows, preserving selection
+      this._populateFilter('rkg-site-filter',
+        [...new Set(this.rows.map(r => r.site))].sort());
+      this._populateFilter('rkg-subject-filter',
+        [...new Set(this.rows.map(r => r.subject))].sort());
+      this._populateFilter('rkg-reviewer-filter',
+        [...new Set(this.rows.map(r => r.reviewer))].sort());
+
+      const siteSel = document.getElementById('rkg-site-filter').value;
+      const subjSel = document.getElementById('rkg-subject-filter').value;
+      const revSel  = document.getElementById('rkg-reviewer-filter').value;
+
+      const visible = this.rows.filter(r => {
+        if (siteSel && r.site !== siteSel) return false;
+        if (subjSel && r.subject !== subjSel) return false;
+        if (revSel && r.reviewer !== revSel) return false;
+        return true;
+      });
+
+      document.getElementById('count-rankings').textContent = this.rows.length;
+
+      const tbody = document.getElementById('rkg-tbody');
+      tbody.innerHTML = '';
+
+      if (visible.length === 0) {
+        const msg = this.rows.length === 0
+          ? 'No rankings recorded yet.'
+          : 'No rankings match the current filter.';
+        const row = document.createElement('tr');
+        row.className = 'empty-row';
+        row.innerHTML = `<td colspan="9">${msg}</td>`;
+        tbody.appendChild(row);
+      } else {
+        visible.forEach(row => tbody.appendChild(this._renderRow(row)));
+      }
+
+      this._refreshSelectionUI();
+    },
+
+    _populateFilter(id, options) {
+      const sel = document.getElementById(id);
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">All</option>' +
+        options.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('');
+      if (options.includes(prev)) sel.value = prev;
+    },
+
+    _renderRow(row) {
+      const tr = document.createElement('tr');
+      const k = this.keyOf(row);
+      if (this.selected.has(k)) tr.classList.add('selected');
+
+      const p1 = row.phase1Complete
+        ? '<span class="phase-pill done" title="Phase 1 complete">✓</span>'
+        : '<span class="phase-pill missing" title="Phase 1 incomplete">—</span>';
+      const p2 = row.phase2Skipped
+        ? '<span class="phase-pill skipped" title="Phase 2 skipped (kept original)">~</span>'
+        : row.phase2Complete
+          ? '<span class="phase-pill done" title="Phase 2 complete">✓</span>'
+          : '<span class="phase-pill missing" title="Phase 2 incomplete">—</span>';
+
+      const submitted = row.timestampPhase2 || row.timestamp;
+      const submittedStr = submitted ? new Date(submitted).toLocaleString() : '—';
+      const planBadge = row.numPlans
+        ? `<span class="badge badge-${row.numPlans}">${row.numPlans}</span>`
+        : '<span class="badge">?</span>';
+
+      tr.innerHTML = `
+        <td class="col-cbx"><input type="checkbox" ${this.selected.has(k) ? 'checked' : ''}></td>
+        <td><strong>${escapeHtml(row.site)}</strong></td>
+        <td>${escapeHtml(row.subject)}</td>
+        <td>${escapeHtml(row.reviewer)}</td>
+        <td>${p1}</td>
+        <td>${p2}</td>
+        <td title="${escapeHtml(submitted || '')}">${submittedStr}</td>
+        <td>${planBadge}</td>
+        <td class="col-actions"><button class="row-action" title="Delete this ranking">✕</button></td>
+      `;
+
+      tr.querySelector('input[type=checkbox]').addEventListener('change', (e) => {
+        if (e.target.checked) this.selected.add(k);
+        else this.selected.delete(k);
+        tr.classList.toggle('selected', e.target.checked);
+        this._refreshSelectionUI();
+      });
+      tr.querySelector('.row-action').addEventListener('click', () => {
+        this.confirmAndDelete([row]);
+      });
+
+      return tr;
+    },
+
+    _refreshSelectionUI() {
+      document.getElementById('rkg-selected-count').textContent = this.selected.size;
+      document.getElementById('rkg-delete-btn').disabled = this.selected.size === 0;
+
+      const all = document.getElementById('rkg-select-all');
+      const visibleRowEls = document.querySelectorAll('#rkg-tbody tr:not(.empty-row)');
+      let allSelected = visibleRowEls.length > 0;
+      visibleRowEls.forEach(tr => {
+        if (!tr.querySelector('input[type=checkbox]').checked) allSelected = false;
+      });
+      all.checked = allSelected;
+    },
+
+    async confirmAndDelete(rows) {
+      const auth = currentAuth();
+      if (!auth) return;
+
+      const items = rows.map(r =>
+        `${r.site} / ${r.subject} / ${r.reviewer}    ` +
+        `[P1: ${r.phase1Complete ? '✓' : '—'}, ` +
+        `P2: ${r.phase2Skipped ? 'skipped' : r.phase2Complete ? '✓' : '—'}]`
+      );
+      const lead = `You are about to delete <strong>${rows.length}</strong> ranking${rows.length === 1 ? '' : 's'}.<br>` +
+        'Each will be archived to <code>SITES/_rankings/_archived/</code> with the original identity map preserved before being removed. ' +
+        'The associated subject(s) are not affected.';
+
+      const ok = await confirmDelete({
+        title: `Delete ${rows.length} ranking${rows.length === 1 ? '' : 's'}?`,
+        lead,
+        items,
+        cascadeNote: null,
+        dangerLabel: `Delete ${rows.length} ranking${rows.length === 1 ? '' : 's'}`,
+      });
+      if (!ok) return;
+
+      try {
+        const resp = await fetch('/api/admin/delete-rankings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reviewer: auth.name,
+            rankings: rows.map(r => ({ site: r.site, subject: r.subject, reviewer: r.reviewer })),
+          }),
+        });
+        const result = await resp.json();
+        if (!resp.ok) {
+          showToast(`Delete rejected: ${result.error || resp.status}`, 'error');
+          return;
+        }
+        const okCount = (result.deleted || []).length;
+        const errCount = (result.errors || []).length;
+        if (errCount === 0) {
+          showToast(`Deleted ${okCount} ranking${okCount === 1 ? '' : 's'}.`, 'success');
+        } else {
+          showToast(`Deleted ${okCount}, ${errCount} failed — see browser console.`, 'error');
+          console.warn('Ranking delete errors:', result.errors);
+        }
+        rows.forEach(r => this.selected.delete(this.keyOf(r)));
+        await this.load();
+        await refreshAllCounts();
+        // Subject ranking counts may have changed — refresh that tab too
+        if (SubjectsTab.rows.length > 0) await SubjectsTab.load();
+      } catch (e) {
+        showToast(`Delete failed: ${e.message}`, 'error');
+      }
+    },
+
+    wireUp() {
+      document.getElementById('rkg-refresh-btn').addEventListener('click', () => this.load());
+      ['rkg-site-filter', 'rkg-subject-filter', 'rkg-reviewer-filter'].forEach(id => {
+        document.getElementById(id).addEventListener('change', () => this.render());
+      });
+      document.getElementById('rkg-delete-btn').addEventListener('click', () => {
+        const selected = this.rows.filter(r => this.selected.has(this.keyOf(r)));
+        if (selected.length > 0) this.confirmAndDelete(selected);
+      });
+      document.getElementById('rkg-select-all').addEventListener('change', (e) => {
+        const siteSel = document.getElementById('rkg-site-filter').value;
+        const subjSel = document.getElementById('rkg-subject-filter').value;
+        const revSel  = document.getElementById('rkg-reviewer-filter').value;
+        const visible = this.rows.filter(r =>
+          (!siteSel || r.site === siteSel) &&
+          (!subjSel || r.subject === subjSel) &&
+          (!revSel || r.reviewer === revSel)
+        );
+        if (e.target.checked) {
+          visible.forEach(r => this.selected.add(this.keyOf(r)));
+        } else {
+          visible.forEach(r => this.selected.delete(this.keyOf(r)));
+        }
+        this.render();
+      });
+    },
+  };
+
   function currentAuth() {
     try {
       const raw = sessionStorage.getItem(SESSION_KEY);
@@ -916,13 +1174,16 @@
     // Top bar wiring
     document.getElementById('logout-btn').addEventListener('click', logout);
 
-    // Tab switching
+    // Tab switching — lazy-load each tab on first activation
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+        const tab = btn.dataset.tab;
+        document.getElementById(`tab-${tab}`).classList.add('active');
+        if (tab === 'subjects' && SubjectsTab.rows.length === 0) SubjectsTab.load();
+        if (tab === 'rankings' && RankingsTab.rows.length === 0) RankingsTab.load();
       });
     });
   });
