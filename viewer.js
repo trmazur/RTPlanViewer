@@ -1681,6 +1681,18 @@ function getStatusClass(subjectName) {
 }
 
 // Rebuild the full subject list inside the dropdown
+/** Build a reviewer-facing label for a subject record from the
+ *  /api/subjects response. Returns "Display ID (Anatomical Site)" when
+ *  both fields are available, falls back gracefully through:
+ *    displayId (anatomicalSite)  →  displayId  →  directory name.
+ *  Used in the dropdown, the trigger button, and the case-label so all
+ *  three stay consistent. */
+function formatSubjectLabel(subj) {
+  const display = subj.displayId || subj.name;
+  if (subj.anatomicalSite) return `${display} (${subj.anatomicalSite})`;
+  return display;
+}
+
 function renderSubjectDropdown() {
   const items = document.getElementById('subj-items');
   if (!items) return;
@@ -1698,7 +1710,8 @@ function renderSubjectDropdown() {
     dot.id = `sdot-${CSS.escape(subj.name)}`;
 
     const label = document.createElement('span');
-    label.textContent = subj.name + (subj.status !== 'processed' ? ' (not processed)' : '');
+    label.textContent = formatSubjectLabel(subj) +
+      (subj.status !== 'processed' ? ' (not processed)' : '');
     label.style.flex = '1';
 
     item.append(dot, label);
@@ -1731,7 +1744,12 @@ function updateSubjectStatus(subjectName) {
 let _pendingSubject = null;
 function subjectDropdownSelect(name) {
   _pendingSubject = name;
-  document.getElementById('subj-trigger-text').textContent = name;
+  // Show "Display ID (Anatomical Site)" in the trigger, falling back
+  // through formatSubjectLabel() if either field is missing.
+  const subj = (S.currentSubjects || []).find(s => s.name === name);
+  document.getElementById('subj-trigger-text').textContent = subj
+    ? formatSubjectLabel(subj)
+    : name;
   document.getElementById('subj-trigger-dot').className = `sdot sdot-${getStatusClass(name)}`;
   // Highlight selected item
   document.querySelectorAll('.subj-item').forEach(el => {
@@ -2615,18 +2633,18 @@ async function initNavigation() {
 
       applyLoadedData(data);
 
-      // Update UI — use displayName when we have it, with the subject's
-      // per-site labels appended for clinical context. Falls back to the
-      // project ID if displayName isn't loaded for some reason.
+      // Update top-bar case label.
+      // Format: <project displayName> / <Display ID (Anatomical Site)>  ·  <Contributing Site>
+      // Falls back through formatSubjectLabel for missing per-subject fields.
       const proj = (S.projectsById || {})[site] || {};
       const projDisplay = proj.displayName || site;
       const subjMeta = (S.currentSubjects || []).find(s => s.name === subject);
-      const labelBits = [];
-      if (subjMeta?.contributingSite) labelBits.push(subjMeta.contributingSite);
-      if (subjMeta?.anatomicalSite)  labelBits.push(subjMeta.anatomicalSite);
-      const labelSuffix = labelBits.length ? `  ·  ${labelBits.join(' / ')}` : '';
+      const subjLabel = subjMeta ? formatSubjectLabel(subjMeta) : subject;
+      const contribSuffix = subjMeta?.contributingSite
+        ? `  ·  ${subjMeta.contributingSite}`
+        : '';
       document.getElementById('case-label').textContent =
-        `${projDisplay} / ${subject}${labelSuffix}`;
+        `${projDisplay} / ${subjLabel}${contribSuffix}`;
       // Sync dropdown selection highlight and trigger dot
       document.querySelectorAll('.subj-item').forEach(el => {
         el.classList.toggle('selected', el.dataset.name === subject);

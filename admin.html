@@ -428,6 +428,14 @@
       <div style="font-weight:700;font-size:14px;margin-bottom:10px">Subject labels</div>
       <div class="form-row" style="margin-bottom:8px">
         <div class="form-group">
+          <label>Display ID</label>
+          <input type="text" id="subject-display-id" placeholder="e.g. CARD-001 or PT-A-2026-04">
+          <small style="font-size:11px;color:var(--text-dim);margin-top:4px;display:block">
+            Friendly label shown to reviewers. Defaults to the folder name; override to give reviewers a study-specific code.
+            The internal directory name (used for storage) is unchanged.
+          </small>
+        </div>
+        <div class="form-group">
           <label>Contributing Site</label>
           <select id="subject-contributing-site">
             <option value="">— Pick one —</option>
@@ -2468,28 +2476,42 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
 // Plan-Count Confirmation (gates Step 3)
 // =============================================================================
 
-// Show the per-subject site-label block (contributing site + anatomical site).
-// Called when validation succeeds. Both labels are required before downstream
-// steps unlock — enforced inside the plan-count confirmation handler.
+// Show the per-subject site-label block (display ID + contributing site +
+// anatomical site). Called when validation succeeds. Display ID defaults to
+// the validated subject directory name; the other two require explicit picks
+// before downstream steps unlock (enforced by the plan-count handler).
 function showSubjectLabelsBlock() {
   document.getElementById('subject-labels-block').classList.remove('hidden');
   // Pre-fill from existing manifest if re-validating an in-progress import
-  // (otherwise users would have to re-pick after a fresh validation)
+  const idInput = document.getElementById('subject-display-id');
   const contribSel = document.getElementById('subject-contributing-site');
   const anatSel = document.getElementById('subject-anatomical-site');
+
+  // Display ID defaults to App.subjectPath (the directory name). User
+  // can override; whatever is in the box at submit time wins.
+  if (!idInput.value || idInput.value === App._lastSubjectPath) {
+    idInput.value = App.displayId || App.subjectPath || '';
+  }
+  App._lastSubjectPath = App.subjectPath;
+
   if (App.contributingSite) contribSel.value = App.contributingSite;
   if (App.anatomicalSite) anatSel.value = App.anatomicalSite;
 }
 
 // Capture the per-subject label values into App state. Returns null if
-// either is missing, otherwise an object { contributingSite, anatomicalSite }.
+// any required label is missing. Display ID is required (defaults to
+// folder name, but the user can blank it — we treat blank as "use the
+// folder name").
 function readSubjectLabels() {
+  const displayId = (document.getElementById('subject-display-id')?.value || '').trim()
+                  || App.subjectPath;  // fallback to folder name
   const contributing = (document.getElementById('subject-contributing-site')?.value || '').trim();
   const anatomical = (document.getElementById('subject-anatomical-site')?.value || '').trim();
   if (!contributing || !anatomical) return null;
+  App.displayId = displayId;
   App.contributingSite = contributing;
   App.anatomicalSite = anatomical;
-  return { contributingSite: contributing, anatomicalSite: anatomical };
+  return { displayId, contributingSite: contributing, anatomicalSite: anatomical };
 }
 
 // Populate and reveal the confirmation block based on current App state.
@@ -2968,6 +2990,7 @@ document.getElementById('export-btn').addEventListener('click', async () => {
 
   const manifest = {
     subject: App.subjectPath,
+    displayId: labels.displayId,           // friendly label shown to reviewers
     project: App.siteConfig?.project || App.siteConfig?.site || 'UNKNOWN',  // canonical
     site: App.siteConfig?.site || 'UNKNOWN',  // legacy mirror, removed in phase 7
     contributingSite: labels.contributingSite,

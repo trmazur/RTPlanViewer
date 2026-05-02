@@ -697,18 +697,22 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                 if not entry.is_dir() or entry.name.startswith('_'):
                     continue
                 manifest_path = entry / '_processed' / 'manifest.json'
+                display_id = None
                 contributing = None
                 anatomical = None
                 if manifest_path.exists():
                     try:
                         with open(manifest_path, 'r', encoding='utf-8') as f:
                             m = json.load(f)
+                        display_id = m.get('displayId')
                         contributing = m.get('contributingSite')
                         anatomical = m.get('anatomicalSite')
                     except Exception:
                         pass
                 subjects.append({
                     'name': entry.name,
+                    # Fall back to directory name if displayId not set (legacy data)
+                    'displayId': display_id or entry.name,
                     'status': 'processed' if manifest_path.exists() else 'unprocessed',
                     'hasManifest': manifest_path.exists(),
                     'contributingSite': contributing,
