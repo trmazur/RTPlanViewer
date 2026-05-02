@@ -252,6 +252,135 @@
       opacity: 0.35;
       background: rgba(255,85,68,0.05);
     }
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #3b8be8;
+      border-color: #3b8be8;
+      color: #fff;
+    }
+    .btn-primary:disabled { opacity: 0.4; }
+
+    /* ── Project status badges (used in projects table + viewer link) ── */
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 11px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .status-draft { background: rgba(119,119,119,0.2); color: var(--text-dim); }
+    .status-ready { background: rgba(68,204,119,0.18); color: var(--green); border: 1px solid rgba(68,204,119,0.35); }
+    .status-closed { background: rgba(255,204,68,0.15); color: var(--yellow); border: 1px solid rgba(255,204,68,0.35); }
+
+    .owner-chip, .site-chip {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 9px;
+      background: var(--panel2);
+      font-size: 10px;
+      color: var(--text);
+      margin-right: 3px;
+      margin-bottom: 2px;
+      white-space: nowrap;
+    }
+    .owner-chip { background: rgba(74,158,255,0.12); color: var(--accent); }
+    .site-chip { background: rgba(136,238,102,0.12); color: var(--row-C, #88ee66); }
+
+    .row-edit {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-right: 4px;
+    }
+    .row-edit:hover { color: var(--accent); background: rgba(74,158,255,0.08); }
+
+    /* ── Project create/edit modal ── */
+    #project-edit-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    #project-edit-modal.hidden { display: none; }
+    .pem-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .pem-label {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+    .pem-required { color: var(--red); margin-left: 2px; }
+    .pem-field input, .pem-field textarea {
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 7px 10px;
+      font-family: inherit;
+    }
+    .pem-field input:focus, .pem-field textarea:focus {
+      outline: 2px solid var(--accent);
+      border-color: var(--accent);
+    }
+    .pem-field input:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      background: #181818;
+    }
+    .pem-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+    .pem-hint code { background: var(--panel2); padding: 1px 5px; border-radius: 3px; }
+    .pem-status-buttons {
+      display: flex;
+      gap: 6px;
+    }
+    .status-btn {
+      padding: 5px 14px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+    .status-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .status-btn.active[data-status=draft]  { background: rgba(119,119,119,0.3); border-color: var(--text-dim); color: var(--text); }
+    .status-btn.active[data-status=ready]  { background: rgba(68,204,119,0.2); border-color: var(--green); color: var(--green); }
+    .status-btn.active[data-status=closed] { background: rgba(255,204,68,0.2); border-color: var(--yellow); color: var(--yellow); }
+
+    .pem-error {
+      background: rgba(255,85,68,0.1);
+      border: 1px solid var(--red);
+      color: var(--red);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
 
     /* ── Data table ── */
     .data-table {
@@ -449,7 +578,10 @@
     </div>
 
     <div id="tab-nav">
-      <button class="tab-btn active" data-tab="subjects">
+      <button class="tab-btn active" data-tab="projects">
+        Projects <span class="tab-count" id="count-projects">—</span>
+      </button>
+      <button class="tab-btn" data-tab="subjects">
         Processed Subjects <span class="tab-count" id="count-subjects">—</span>
       </button>
       <button class="tab-btn" data-tab="rankings">
@@ -461,7 +593,37 @@
     </div>
 
     <div id="tab-content">
-      <div id="tab-subjects" class="tab-pane active">
+      <div id="tab-projects" class="tab-pane active">
+        <div class="toolbar">
+          <label for="proj-status-filter">Status:</label>
+          <select id="proj-status-filter">
+            <option value="">All</option>
+            <option value="draft">Draft</option>
+            <option value="ready">Ready</option>
+            <option value="closed">Closed</option>
+          </select>
+          <button class="btn" id="proj-refresh-btn" title="Refresh from server">⟳ Refresh</button>
+          <div style="flex:1"></div>
+          <button class="btn btn-primary" id="proj-create-btn">+ New project</button>
+        </div>
+        <table class="data-table" id="proj-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Project</th>
+              <th>Owners</th>
+              <th>Contributing sites</th>
+              <th>Subjects</th>
+              <th>Created</th>
+              <th>Ready since</th>
+              <th class="col-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="proj-tbody"></tbody>
+        </table>
+      </div>
+
+      <div id="tab-subjects" class="tab-pane">
         <div class="toolbar">
           <label for="subj-site-filter">Site:</label>
           <select id="subj-site-filter">
@@ -552,6 +714,67 @@
     </div>
   </div>
 
+  <!-- Create / edit project modal -->
+  <div id="project-edit-modal" class="hidden">
+    <div class="confirm-card" style="max-width:640px;border-color:var(--accent)">
+      <h3 id="pem-title" style="color:var(--accent)">New project</h3>
+      <div class="lead" id="pem-lead">Configure the project. Status starts as <em>Draft</em>; reviewers don't see drafts until you flip to <em>Ready</em>.</div>
+
+      <form id="pem-form" style="display:flex;flex-direction:column;gap:14px">
+
+        <label class="pem-field">
+          <span class="pem-label">Project ID <span class="pem-required">*</span></span>
+          <input type="text" id="pem-id" required placeholder="CARDIAC_PILOT_2026" autocomplete="off" />
+          <small class="pem-hint">3-80 chars. Letters, numbers, dot, dash, underscore. <strong>Cannot be changed after creation</strong> — used as a directory name.</small>
+        </label>
+
+        <label class="pem-field">
+          <span class="pem-label">Display name <span class="pem-required">*</span></span>
+          <input type="text" id="pem-display-name" required placeholder="Cardiac SBRT Pilot Study (2026)" />
+          <small class="pem-hint">Shown to reviewers. Free-form text.</small>
+        </label>
+
+        <label class="pem-field">
+          <span class="pem-label">Description</span>
+          <textarea id="pem-description" rows="2" placeholder="Optional — brief description of the study"></textarea>
+        </label>
+
+        <label class="pem-field">
+          <span class="pem-label">Contributing sites</span>
+          <input type="text" id="pem-contributing-sites" placeholder="WASHU, JHU, MGH" />
+          <small class="pem-hint">Comma-separated. Becomes the per-subject "Contributing Site" dropdown options in the admin tool.</small>
+        </label>
+
+        <label class="pem-field">
+          <span class="pem-label">Owners <span class="pem-required">*</span></span>
+          <input type="text" id="pem-owners" required placeholder="Tom Mazur, Hailee Brown" />
+          <small class="pem-hint">Comma-separated. Names must match <code>reviewers.json</code> exactly. Owners can edit/delete the project; global super-users can override.</small>
+        </label>
+
+        <div class="pem-field" id="pem-status-row">
+          <span class="pem-label">Status</span>
+          <div class="pem-status-buttons">
+            <button type="button" class="status-btn" data-status="draft">Draft</button>
+            <button type="button" class="status-btn" data-status="ready">Ready</button>
+            <button type="button" class="status-btn" data-status="closed">Closed</button>
+          </div>
+          <small class="pem-hint">
+            <strong>Draft:</strong> only visible in the management page.
+            <strong>Ready:</strong> reviewers can open the project in the viewer and submit rankings.
+            <strong>Closed:</strong> existing rankings preserved; no new ones accepted.
+          </small>
+        </div>
+
+        <div id="pem-error" class="pem-error hidden"></div>
+
+        <div class="confirm-actions">
+          <button type="button" class="btn" id="pem-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="pem-save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Shared confirmation modal — rebuilt per use -->
   <div id="confirm-modal" class="hidden">
     <div class="confirm-card">
@@ -636,11 +859,12 @@
 
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(auth));
     // Wire up tab modules now that the auth context is established
+    ProjectsTab.wireUp();
     SubjectsTab.wireUp();
     RankingsTab.wireUp();
     AuditLogTab.wireUp();
-    // Initial load — populates active tab + drives tab counters
-    SubjectsTab.load();
+    // Initial load — populates active (Projects) tab + drives counters
+    ProjectsTab.load();
     refreshAllCounts();
   }
 
@@ -656,11 +880,13 @@
     const auth = currentAuth();
     if (!auth) return;
     try {
-      const [s, r, a] = await Promise.all([
-        fetch(`/api/admin/subjects?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.json()),
-        fetch(`/api/admin/rankings?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.json()),
-        fetch(`/api/admin/audit-log?reviewer=${encodeURIComponent(auth.name)}&limit=1`).then(r => r.json()),
+      const [p, s, r, a] = await Promise.all([
+        fetch(`/api/projects?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.ok ? r.json() : { projects: [] }),
+        fetch(`/api/admin/subjects?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.ok ? r.json() : { subjects: [] }),
+        fetch(`/api/admin/rankings?reviewer=${encodeURIComponent(auth.name)}`).then(r => r.ok ? r.json() : { rankings: [] }),
+        fetch(`/api/admin/audit-log?reviewer=${encodeURIComponent(auth.name)}&limit=1`).then(r => r.ok ? r.json() : { totalOnDisk: 0 }),
       ]);
+      document.getElementById('count-projects').textContent = (p.projects || []).length;
       document.getElementById('count-subjects').textContent = (s.subjects || []).length;
       document.getElementById('count-rankings').textContent = (r.rankings || []).length;
       document.getElementById('count-audit').textContent = a.totalOnDisk || 0;
@@ -712,6 +938,311 @@
       document.getElementById('confirm-go').onclick = () => { cleanup(); resolve(true); };
       document.getElementById('confirm-cancel').onclick = () => { cleanup(); resolve(false); };
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Projects Tab
+  // ─────────────────────────────────────────────────────────────────────────
+  const ProjectsTab = {
+    rows: [],
+    isGlobalSuperUser: false,
+
+    async load() {
+      const auth = currentAuth();
+      if (!auth) return;
+      try {
+        const resp = await fetch(`/api/projects?reviewer=${encodeURIComponent(auth.name)}`);
+        if (!resp.ok) {
+          // 403 means the user is in _super_users.json but doesn't own
+          // any projects — show an empty state, not an error.
+          if (resp.status === 403) {
+            this.rows = [];
+            this.isGlobalSuperUser = false;
+            this.render();
+            return;
+          }
+          showToast(`Could not load projects (HTTP ${resp.status})`, 'error');
+          return;
+        }
+        const data = await resp.json();
+        this.rows = data.projects || [];
+        this.isGlobalSuperUser = !!data.isGlobalSuperUser;
+        this.render();
+      } catch (e) {
+        showToast(`Project load failed: ${e.message}`, 'error');
+      }
+    },
+
+    render() {
+      const statusFilter = document.getElementById('proj-status-filter').value;
+      const visible = statusFilter
+        ? this.rows.filter(r => r.status === statusFilter)
+        : this.rows;
+
+      document.getElementById('count-projects').textContent = this.rows.length;
+
+      // Only global super-users can create projects (the server enforces
+      // this independently). Hide the button for non-globals.
+      document.getElementById('proj-create-btn').style.display =
+        this.isGlobalSuperUser ? '' : 'none';
+
+      const tbody = document.getElementById('proj-tbody');
+      tbody.innerHTML = '';
+
+      if (visible.length === 0) {
+        const msg = this.rows.length === 0
+          ? (this.isGlobalSuperUser
+              ? 'No projects yet — click "+ New project" to create one.'
+              : 'No projects assigned to you.')
+          : 'No projects match the current filter.';
+        const row = document.createElement('tr');
+        row.className = 'empty-row';
+        row.innerHTML = `<td colspan="8">${escapeHtml(msg)}</td>`;
+        tbody.appendChild(row);
+        return;
+      }
+
+      visible.forEach(p => tbody.appendChild(this._renderRow(p)));
+    },
+
+    _renderRow(p) {
+      const tr = document.createElement('tr');
+
+      const statusCls = `status-badge status-${p.status || 'draft'}`;
+      const ownerChips = (p.owners || [])
+        .map(o => `<span class="owner-chip">${escapeHtml(o)}</span>`).join('');
+      const siteChips = (p.contributingSites || []).length
+        ? p.contributingSites.map(s => `<span class="site-chip">${escapeHtml(s)}</span>`).join('')
+        : '<span style="color:var(--text-dim);font-style:italic">none yet</span>';
+      const created = p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—';
+      const ready = p.readyAt
+        ? new Date(p.readyAt).toLocaleDateString()
+        : (p.status === 'closed' && p.closedAt
+            ? `closed ${new Date(p.closedAt).toLocaleDateString()}`
+            : '—');
+
+      tr.innerHTML = `
+        <td><span class="${statusCls}">${escapeHtml(p.status || 'draft')}</span></td>
+        <td>
+          <div><strong>${escapeHtml(p.displayName || p.id)}</strong></div>
+          <div style="font-size:11px;color:var(--text-dim);font-family:'Consolas',monospace">${escapeHtml(p.id)}</div>
+        </td>
+        <td>${ownerChips}</td>
+        <td>${siteChips}</td>
+        <td>${p.subjectCount || 0}</td>
+        <td title="${escapeHtml(p.createdAt || '')}">${created}</td>
+        <td>${ready}</td>
+        <td class="col-actions">
+          <button class="row-edit" title="Edit project">✎</button>
+          <button class="row-action" title="Delete project">✕</button>
+        </td>
+      `;
+
+      tr.querySelector('.row-edit').addEventListener('click', () => this.openEditModal(p));
+      tr.querySelector('.row-action').addEventListener('click', () => this.confirmAndDelete(p));
+
+      return tr;
+    },
+
+    openCreateModal() {
+      ProjectEditModal.open({ mode: 'create' });
+    },
+
+    openEditModal(project) {
+      ProjectEditModal.open({ mode: 'edit', project });
+    },
+
+    async confirmAndDelete(project) {
+      if ((project.subjectCount || 0) > 0) {
+        showToast(
+          `Cannot delete project "${project.displayName}" — it has ${project.subjectCount} subject${project.subjectCount === 1 ? '' : 's'}. Delete subjects first.`,
+          'error');
+        return;
+      }
+      const ok = await confirmDelete({
+        title: `Delete project "${project.displayName}"?`,
+        lead: `This is a no-subject project, so deletion only removes the project config and directory.<br>` +
+              `The config will be archived to <code>PROJECTS/_archived/projects/</code>.`,
+        items: [`${project.id}    [status: ${project.status}, owners: ${(project.owners || []).join(', ')}]`],
+        cascadeNote: null,
+        dangerLabel: 'Delete project',
+      });
+      if (!ok) return;
+
+      const auth = currentAuth();
+      try {
+        const resp = await fetch(`/api/projects/${encodeURIComponent(project.id)}?reviewer=${encodeURIComponent(auth.name)}`, {
+          method: 'DELETE',
+        });
+        const result = await resp.json();
+        if (!resp.ok) {
+          showToast(`Delete rejected: ${result.error || resp.status}`, 'error');
+          return;
+        }
+        showToast(`Project "${project.id}" deleted.`, 'success');
+        await this.load();
+      } catch (e) {
+        showToast(`Delete failed: ${e.message}`, 'error');
+      }
+    },
+
+    wireUp() {
+      document.getElementById('proj-refresh-btn').addEventListener('click', () => this.load());
+      document.getElementById('proj-status-filter').addEventListener('change', () => this.render());
+      document.getElementById('proj-create-btn').addEventListener('click', () => this.openCreateModal());
+      ProjectEditModal.wireUp();
+    },
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Project Create/Edit Modal
+  // ─────────────────────────────────────────────────────────────────────────
+  const ProjectEditModal = {
+    mode: 'create',          // 'create' | 'edit'
+    originalProject: null,   // when editing, the loaded project for diff
+
+    open({ mode, project }) {
+      this.mode = mode;
+      this.originalProject = project || null;
+
+      document.getElementById('pem-error').classList.add('hidden');
+
+      const idInput = document.getElementById('pem-id');
+      const titleEl = document.getElementById('pem-title');
+      const leadEl = document.getElementById('pem-lead');
+      const saveBtn = document.getElementById('pem-save');
+      const statusRow = document.getElementById('pem-status-row');
+
+      if (mode === 'create') {
+        titleEl.textContent = 'New project';
+        leadEl.innerHTML = `Configure the project. Status starts as <em>Draft</em>; reviewers don't see drafts until you flip to <em>Ready</em>.`;
+        idInput.value = '';
+        idInput.disabled = false;
+        document.getElementById('pem-display-name').value = '';
+        document.getElementById('pem-description').value = '';
+        document.getElementById('pem-contributing-sites').value = '';
+        document.getElementById('pem-owners').value = currentAuth()?.name || '';
+        // Status row hidden for create — always starts draft
+        statusRow.classList.add('hidden');
+        saveBtn.textContent = 'Create project';
+      } else {
+        titleEl.textContent = `Edit project: ${project.displayName}`;
+        leadEl.innerHTML = `Project ID is read-only after creation. Status changes take effect immediately on Save.`;
+        idInput.value = project.id;
+        idInput.disabled = true;
+        document.getElementById('pem-display-name').value = project.displayName || '';
+        document.getElementById('pem-description').value = project.description || '';
+        document.getElementById('pem-contributing-sites').value = (project.contributingSites || []).join(', ');
+        document.getElementById('pem-owners').value = (project.owners || []).join(', ');
+        statusRow.classList.remove('hidden');
+        this._setStatus(project.status || 'draft');
+        saveBtn.textContent = 'Save changes';
+      }
+
+      document.getElementById('project-edit-modal').classList.remove('hidden');
+      // Focus the right initial field
+      setTimeout(() => {
+        if (mode === 'create') idInput.focus();
+        else document.getElementById('pem-display-name').focus();
+      }, 50);
+    },
+
+    close() {
+      document.getElementById('project-edit-modal').classList.add('hidden');
+    },
+
+    _setStatus(status) {
+      document.querySelectorAll('#pem-status-row .status-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.status === status);
+      });
+    },
+
+    _currentStatus() {
+      const active = document.querySelector('#pem-status-row .status-btn.active');
+      return active ? active.dataset.status : 'draft';
+    },
+
+    showError(msg) {
+      const el = document.getElementById('pem-error');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    },
+
+    async submit() {
+      const auth = currentAuth();
+      if (!auth) return;
+
+      const id = document.getElementById('pem-id').value.trim();
+      const displayName = document.getElementById('pem-display-name').value.trim();
+      const description = document.getElementById('pem-description').value.trim();
+      const contributing = parseCsvList(document.getElementById('pem-contributing-sites').value);
+      const owners = parseCsvList(document.getElementById('pem-owners').value);
+
+      if (!id) { this.showError('Project ID is required.'); return; }
+      if (!displayName) { this.showError('Display name is required.'); return; }
+      if (owners.length === 0) { this.showError('At least one owner is required.'); return; }
+
+      try {
+        if (this.mode === 'create') {
+          const resp = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              reviewer: auth.name,
+              id, displayName, description,
+              contributingSites: contributing,
+              owners,
+            }),
+          });
+          const result = await resp.json();
+          if (!resp.ok) { this.showError(result.error || `HTTP ${resp.status}`); return; }
+          showToast(`Project "${id}" created.`, 'success');
+          this.close();
+          await ProjectsTab.load();
+        } else {
+          // Edit — PATCH with whatever changed (server figures out the diff,
+          // we just send all editable fields)
+          const status = this._currentStatus();
+          const patch = { displayName, description, contributingSites: contributing, owners, status };
+          const resp = await fetch(`/api/projects/${encodeURIComponent(id)}?reviewer=${encodeURIComponent(auth.name)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+          });
+          const result = await resp.json();
+          if (!resp.ok) { this.showError(result.error || `HTTP ${resp.status}`); return; }
+          if (result.noChange) {
+            showToast(`No changes to save for "${id}".`, '');
+          } else {
+            showToast(`Project "${id}" updated (${(result.changed || []).join(', ')}).`, 'success');
+          }
+          this.close();
+          await ProjectsTab.load();
+        }
+      } catch (e) {
+        this.showError(`Save failed: ${e.message}`);
+      }
+    },
+
+    wireUp() {
+      document.getElementById('pem-cancel').addEventListener('click', () => this.close());
+      document.getElementById('pem-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        this.submit();
+      });
+      // Status pill clicks
+      document.querySelectorAll('#pem-status-row .status-btn').forEach(btn => {
+        btn.addEventListener('click', () => this._setStatus(btn.dataset.status));
+      });
+    },
+  };
+
+  /** Parse a comma-separated list, trimming and removing empty items. */
+  function parseCsvList(s) {
+    return String(s || '')
+      .split(',')
+      .map(x => x.trim())
+      .filter(Boolean);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1297,6 +1828,7 @@
         btn.classList.add('active');
         const tab = btn.dataset.tab;
         document.getElementById(`tab-${tab}`).classList.add('active');
+        if (tab === 'projects') ProjectsTab.load();  // always refresh — small payload
         if (tab === 'subjects' && SubjectsTab.rows.length === 0) SubjectsTab.load();
         if (tab === 'rankings' && RankingsTab.rows.length === 0) RankingsTab.load();
         if (tab === 'audit') AuditLogTab.load();  // always refresh — it's read-only and small
