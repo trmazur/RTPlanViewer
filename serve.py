@@ -31,24 +31,31 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 # Resolve the directory this script lives in
 VIEWER_DIR = Path(__file__).resolve().parent
 
-# ── Legacy site-keyed data (read-only during transition) ─────────────────
-# Existing data lives under SITES/. New data lives under PROJECTS/. The
-# auto-migration script (Phase 3) will move everything from SITES/ to
-# PROJECTS/. Until then both layouts coexist; existing endpoints continue
-# to read from SITES/.
-SITES_DIR = VIEWER_DIR / 'SITES'
-RANKINGS_DIR = SITES_DIR / '_rankings'
-
-# ── New project-keyed data ───────────────────────────────────────────────
+# ── Project-keyed data (canonical post-phase-3) ──────────────────────────
 # Each project is a directory under PROJECTS/ containing _project_config.json
 # and one subdirectory per subject (containing _processed/). Rankings live
-# in a flat directory at the top of PROJECTS/.
+# in a flat directory at the top of PROJECTS/. Archive + audit log
+# also live under PROJECTS/.
 PROJECTS_DIR = VIEWER_DIR / 'PROJECTS'
 PROJECT_RANKINGS_DIR = PROJECTS_DIR / '_rankings'
 PROJECT_ARCHIVED_DIR = PROJECTS_DIR / '_archived'
 PROJECT_RANKINGS_ARCHIVE_DIR = PROJECT_ARCHIVED_DIR / 'rankings'
 PROJECT_SUBJECTS_ARCHIVE_DIR = PROJECT_ARCHIVED_DIR / 'subjects'
 PROJECT_ADMIN_LOG_FILE = PROJECTS_DIR / '_admin_log.json'
+
+# ── Legacy site-keyed data (rollback safety net only) ────────────────────
+# Pre-migration data still on disk. The application no longer reads from
+# here; it's preserved so the admin can hand-restore by deleting PROJECTS/
+# and rolling code back to baseline-pre-project-restructure if needed.
+# These constants stay defined for the few legacy code paths that haven't
+# been swept yet (subject-exists fallback, etc.) — phase 7 cleanup
+# removes them.
+SITES_DIR = VIEWER_DIR / 'SITES'
+
+# ── Active aliases used throughout the rest of the file ──────────────────
+# These names predate the project-restructure but the variables now point
+# at the project-keyed locations. Phase 7 will rename for clarity.
+RANKINGS_DIR = PROJECT_RANKINGS_DIR
 
 # ── Config files ─────────────────────────────────────────────────────────
 SUPER_USERS_FILE = VIEWER_DIR / '_super_users.json'
@@ -345,9 +352,11 @@ def _append_project_audit(entry):
 # All destructive admin actions go through these helpers so the
 # archive-on-delete + audit-log behavior is consistent.
 
-ADMIN_LOG_FILE = SITES_DIR / '_admin_log.json'
-RANKINGS_ARCHIVE_DIR = SITES_DIR / '_rankings' / '_archived'
-SUBJECTS_ARCHIVE_DIR = SITES_DIR / '_processed_archived'
+# Aliases that now point at project-keyed paths (variables predate the
+# rename — phase 7 will rename them in place).
+ADMIN_LOG_FILE = PROJECT_ADMIN_LOG_FILE
+RANKINGS_ARCHIVE_DIR = PROJECT_RANKINGS_ARCHIVE_DIR
+SUBJECTS_ARCHIVE_DIR = PROJECT_SUBJECTS_ARCHIVE_DIR
 
 # Hard cap on number of items deletable in a single API call. Forces a
 # deliberate workflow and protects against accidental "select-all → delete".
@@ -393,17 +402,17 @@ def _validate_site_subject(site, subject):
 
 def _find_ranking_file(site, subject, reviewer):
     """Find a ranking file by JSON content, not filename. Returns Path or None.
-    Filenames substitute spaces for underscores, which makes parsing them
-    ambiguous when names already contain underscores."""
+    Matches against either the new `project` field or the legacy `site`
+    field (both used as the project ID identifier)."""
     if not RANKINGS_DIR.exists():
         return None
     for f in RANKINGS_DIR.glob('*.json'):
         try:
             with open(f, 'r', encoding='utf-8') as fp:
                 data = json.load(fp)
-            if (data.get('site') == site and
-                    data.get('subject') == subject and
-                    data.get('reviewer') == reviewer):
+            if data.get('subject') != subject or data.get('reviewer') != reviewer:
+                continue
+            if data.get('project') == site or data.get('site') == site:
                 return f
         except Exception:
             continue
@@ -437,17 +446,19 @@ def _archive_ranking(ranking_path, super_user, subject_still_processed):
     return archive_path
 
 
-def _archive_subject(site, subject, super_user):
+def _archive_subject(project, subject, super_user):
     """Archive small text files from a subject's _processed/. Returns the
-    archive directory Path. Binary CT/dose volumes are NOT copied."""
-    src = SITES_DIR / site / subject / '_processed'
+    archive directory Path. Binary CT/dose volumes are NOT copied.
+    First positional named `project` (was `site` pre-restructure) — same
+    identifier post-migration."""
+    src = PROJECTS_DIR / project / subject / '_processed'
     if not src.exists():
         return None
 
     SUBJECTS_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     archive_dir = SUBJECTS_ARCHIVE_DIR / (
         f'{_safe_timestamp_for_filename()}_'
-        f'{_safe_filename_chunk(site)}_{_safe_filename_chunk(subject)}'
+        f'{_safe_filename_chunk(project)}_{_safe_filename_chunk(subject)}'
     )
     archive_dir.mkdir(parents=True, exist_ok=True)
 
@@ -473,7 +484,8 @@ def _archive_subject(site, subject, super_user):
         json.dump({
             'deleted_at': datetime.now(timezone.utc).isoformat(),
             'deleted_by': super_user,
-            'site': site,
+            'project': project,
+            'site': project,  # legacy mirror
             'subject': subject,
             'note': ('Binary CT/dose volumes not archived (regenerable from '
                      'DICOM source). Small JSON metadata preserved here for '
@@ -485,7 +497,7 @@ def _archive_subject(site, subject, super_user):
 
 def _append_audit(entry):
     """Append a single entry to the admin audit log (creates if missing)."""
-    SITES_DIR.mkdir(parents=True, exist_ok=True)
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     log = []
     if ADMIN_LOG_FILE.exists():
         try:
@@ -640,30 +652,68 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
     # ── API: List Sites ──────────────────────────────────────────────────
 
     def _handle_list_sites(self):
+        """List projects visible to reviewers (status='ready' only).
+
+        Endpoint URL kept as /api/sites for viewer back-compat. Returns
+        BOTH the legacy `sites` shape (array of IDs) AND a new
+        `projects` array of {id, displayName, contributingSites,
+        anatomicalSiteHint} for richer display.
+        """
         sites = []
-        if SITES_DIR.exists():
-            for entry in sorted(SITES_DIR.iterdir()):
-                if entry.is_dir() and not entry.name.startswith('_'):
-                    sites.append(entry.name)
-        self._json_response({'sites': sites})
+        projects = []
+        for pid, cfg in _list_all_projects():
+            if cfg.get('status') != 'ready':
+                continue
+            sites.append(pid)
+            projects.append({
+                'id': pid,
+                'displayName': cfg.get('displayName', pid),
+                'description': cfg.get('description', ''),
+                'contributingSites': cfg.get('contributingSites', []),
+            })
+        self._json_response({'sites': sites, 'projects': projects})
 
     # ── API: List Subjects ───────────────────────────────────────────────
 
     def _handle_list_subjects(self, site):
-        site_dir = SITES_DIR / site
+        """List subjects under a project.
+
+        Endpoint URL kept as /api/subjects?site=X for viewer back-compat.
+        Reads from PROJECTS/{site}/. Each subject's manifest is read so
+        we can include its contributingSite + anatomicalSite labels in
+        the response, letting the viewer display them in the dropdown
+        without an extra round-trip.
+        """
+        # Refuse to expose subjects from non-ready projects to reviewers
+        cfg = _load_project(site)
+        if not cfg or cfg.get('status') != 'ready':
+            self._json_response({'site': site, 'subjects': []})
+            return
+
+        project_dir = PROJECTS_DIR / site
         subjects = []
-        if site_dir.exists():
-            for entry in sorted(site_dir.iterdir()):
-                if entry.is_dir() and not entry.name.startswith('_'):
-                    # Check if subject has processed data
-                    processed = entry / '_processed'
-                    manifest = processed / 'manifest.json'
-                    status = 'processed' if manifest.exists() else 'unprocessed'
-                    subjects.append({
-                        'name': entry.name,
-                        'status': status,
-                        'hasManifest': manifest.exists(),
-                    })
+        if project_dir.exists():
+            for entry in sorted(project_dir.iterdir()):
+                if not entry.is_dir() or entry.name.startswith('_'):
+                    continue
+                manifest_path = entry / '_processed' / 'manifest.json'
+                contributing = None
+                anatomical = None
+                if manifest_path.exists():
+                    try:
+                        with open(manifest_path, 'r', encoding='utf-8') as f:
+                            m = json.load(f)
+                        contributing = m.get('contributingSite')
+                        anatomical = m.get('anatomicalSite')
+                    except Exception:
+                        pass
+                subjects.append({
+                    'name': entry.name,
+                    'status': 'processed' if manifest_path.exists() else 'unprocessed',
+                    'hasManifest': manifest_path.exists(),
+                    'contributingSite': contributing,
+                    'anatomicalSite': anatomical,
+                })
         self._json_response({'site': site, 'subjects': subjects})
 
     # ── API: Get/Save Site Config ────────────────────────────────────────
@@ -755,26 +805,31 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
     def _handle_admin_list_subjects(self, reviewer):
         """List processed subjects the super-user can see, with metadata.
 
-        Returns one entry per subject directory that has a manifest.json,
-        filtered by the reviewer's site permissions. Each entry includes
-        plan list, processed-at timestamp, ranking count, and total disk
-        size — enough to populate a management table without further calls.
+        Reads from PROJECTS/{project}/{subject}/_processed/manifest.json.
+        Project-level access controls the visibility — global super-users
+        see all projects; project owners see their own. Each entry
+        includes plan list, processed-at timestamp, ranking count, and
+        total disk size.
         """
         if not _is_super_user(reviewer):
             self._json_response({'error': 'Not authorized'}, 403)
             return
 
-        accessible = _accessible_sites(reviewer)  # None = global
+        # Project-level access (replaces site-keyed permission model)
+        accessible_projects = None  # None = global, set = limited list
+        if reviewer not in _global_super_users():
+            accessible_projects = {pid for pid, _ in _visible_projects(reviewer)}
+
         subjects = []
 
-        if SITES_DIR.exists():
-            for site_dir in sorted(SITES_DIR.iterdir()):
-                if not site_dir.is_dir() or site_dir.name.startswith('_'):
+        if PROJECTS_DIR.exists():
+            for project_dir in sorted(PROJECTS_DIR.iterdir()):
+                if not project_dir.is_dir() or project_dir.name.startswith('_'):
                     continue
-                site = site_dir.name
-                if accessible is not None and site not in accessible:
+                project_id = project_dir.name
+                if accessible_projects is not None and project_id not in accessible_projects:
                     continue
-                for subj_dir in sorted(site_dir.iterdir()):
+                for subj_dir in sorted(project_dir.iterdir()):
                     if not subj_dir.is_dir() or subj_dir.name.startswith('_'):
                         continue
                     manifest_path = subj_dir / '_processed' / 'manifest.json'
@@ -805,18 +860,21 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                         pass
 
                     subjects.append({
-                        'site': site,
+                        'site': project_id,            # legacy field name (= project ID)
+                        'project': project_id,
                         'subject': subj_dir.name,
                         'plans': plans,
                         'numPlans': len(plans),
                         'processedAt': m.get('validatedAt'),
-                        'rankingCount': self._count_rankings_for(site, subj_dir.name),
+                        'contributingSite': m.get('contributingSite'),
+                        'anatomicalSite': m.get('anatomicalSite'),
+                        'rankingCount': self._count_rankings_for(project_id, subj_dir.name),
                         'totalSizeMB': round(total_size / 1024 / 1024, 2),
                     })
 
         self._json_response({
             'subjects': subjects,
-            'accessibleSites': sorted(accessible) if accessible is not None else None,  # None = global
+            'accessibleSites': sorted(accessible_projects) if accessible_projects is not None else None,
         })
 
     def _handle_admin_list_rankings(self, reviewer, site_filter, subject_filter, reviewer_filter):
@@ -831,7 +889,11 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({'error': 'Not authorized'}, 403)
             return
 
-        accessible = _accessible_sites(reviewer)
+        # Project-level access (replaces site-keyed permission model)
+        accessible_projects = None  # None = global
+        if reviewer not in _global_super_users():
+            accessible_projects = {pid for pid, _ in _visible_projects(reviewer)}
+
         rankings = []
 
         if RANKINGS_DIR.exists():
@@ -843,13 +905,15 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     continue
 
-                site = data.get('site', '')
+                # Prefer the new `project` field; fall back to `site` for
+                # rankings written before phase 6.
+                project = data.get('project') or data.get('site', '')
                 subject = data.get('subject', '')
                 rname = data.get('reviewer', '')
 
-                if accessible is not None and site not in accessible:
+                if accessible_projects is not None and project not in accessible_projects:
                     continue
-                if site_filter and site != site_filter:
+                if site_filter and project != site_filter:
                     continue
                 if subject_filter and subject != subject_filter:
                     continue
@@ -857,7 +921,8 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                     continue
 
                 rankings.append({
-                    'site': site,
+                    'site': project,
+                    'project': project,
                     'subject': subject,
                     'reviewer': rname,
                     'phase1Complete': bool(data.get('rankings_phase1')),
@@ -1284,7 +1349,7 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                                'error': 'Ranking file not found'})
                 continue
 
-            manifest_path = SITES_DIR / site / subject / '_processed' / 'manifest.json'
+            manifest_path = PROJECTS_DIR / site / subject / '_processed' / 'manifest.json'
             still_processed = manifest_path.exists()
 
             try:
@@ -1361,7 +1426,7 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                 errors.append({'site': site, 'subject': subject, 'error': 'Not authorized for this site'})
                 continue
 
-            processed_dir = SITES_DIR / site / subject / '_processed'
+            processed_dir = PROJECTS_DIR / site / subject / '_processed'
             if not processed_dir.exists():
                 errors.append({'site': site, 'subject': subject, 'error': 'Subject not processed'})
                 continue
@@ -1374,7 +1439,10 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                     try:
                         with open(rfile, 'r', encoding='utf-8') as f:
                             rdata = json.load(f)
-                        if rdata.get('site') == site and rdata.get('subject') == subject:
+                        # Match either new `project` or legacy `site` field
+                        match = ((rdata.get('project') == site or rdata.get('site') == site)
+                                 and rdata.get('subject') == subject)
+                        if match:
                             arch = _archive_ranking(rfile, super_user,
                                                     subject_still_processed=False)
                             rfile.unlink()
@@ -1422,10 +1490,10 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
 
         self._json_response({'deleted': deleted, 'errors': errors})
 
-    def _count_rankings_for(self, site, subject):
-        """Count how many ranking files reference a given (site, subject).
-        Reads JSON content rather than parsing filename to handle names
-        containing underscores."""
+    def _count_rankings_for(self, project, subject):
+        """Count how many ranking files reference a given (project, subject).
+        Matches against either the new `project` field or the legacy `site`
+        field (both used as the project ID)."""
         if not RANKINGS_DIR.exists():
             return 0
         count = 0
@@ -1433,7 +1501,9 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 with open(rfile, 'r', encoding='utf-8') as f:
                     d = json.load(f)
-                if d.get('site') == site and d.get('subject') == subject:
+                if d.get('subject') != subject:
+                    continue
+                if d.get('project') == project or d.get('site') == project:
                     count += 1
             except Exception:
                 pass
@@ -1458,7 +1528,10 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                if data.get('site') != site or data.get('reviewer') != reviewer:
+                if data.get('reviewer') != reviewer:
+                    continue
+                # Match either new `project` or legacy `site` field
+                if data.get('project') != site and data.get('site') != site:
                     continue
                 subject = data.get('subject', '')
                 if not subject:
@@ -1475,20 +1548,30 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
         self._json_response(status)
 
     def _handle_save_ranking(self):
+        """Save a ranking to PROJECTS/_rankings/. Body uses `project` (new)
+        or `site` (legacy) — same identifier post-migration. Both fields
+        are written into the saved JSON for forward compatibility."""
         content_len = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_len)
         data = json.loads(body)
 
-        site = data.get('site', '')
+        # Accept either field name. Persist BOTH — `project` is canonical
+        # going forward; `site` stays as a mirror until phase 7 cleanup.
+        project = data.get('project') or data.get('site', '')
         subject = data.get('subject', '')
         reviewer = data.get('reviewer', '')
 
-        if not all([site, subject, reviewer]):
-            self._json_response({'error': 'Missing required fields'}, 400)
+        if not all([project, subject, reviewer]):
+            self._json_response({'error': 'Missing required fields (need project, subject, reviewer)'}, 400)
             return
 
+        # Make sure both fields are present in the persisted JSON
+        data['project'] = project
+        if 'site' not in data:
+            data['site'] = project
+
         RANKINGS_DIR.mkdir(parents=True, exist_ok=True)
-        filename = f'{site}_{subject}_{reviewer}.json'.replace(' ', '_')
+        filename = f'{project}_{subject}_{reviewer}.json'.replace(' ', '_')
         filepath = RANKINGS_DIR / filename
 
         with open(filepath, 'w', encoding='utf-8') as f:

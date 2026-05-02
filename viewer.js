@@ -149,10 +149,18 @@ const S = {
 // ─────────────────────────────────────────────────────────────────────────────
 const DataLoader = {
   async loadSites() {
+    // /api/sites now returns ready projects (post-restructure). The
+    // legacy `sites` array (just IDs) is preserved for back-compat;
+    // a richer `projects` array has displayName + contributingSites
+    // and is preferred when available.
     try {
       const resp = await fetch('/api/sites');
       const data = await resp.json();
-      return data.sites || [];
+      // Return the rich shape if present, otherwise fall back to id-only
+      if (Array.isArray(data.projects) && data.projects.length > 0) {
+        return data.projects;
+      }
+      return (data.sites || []).map(id => ({ id, displayName: id }));
     } catch (e) {
       console.warn('Failed to load sites:', e);
       return [];
@@ -179,7 +187,9 @@ const DataLoader = {
   },
 
   async loadSubjectData(site, subject, onProgress) {
-    const base = `SITES/${site}/${subject}/_processed`;
+    // `site` parameter is a project ID post-restructure (same identifier).
+    // The viewer reads from PROJECTS/{project}/{subject}/_processed/.
+    const base = `PROJECTS/${site}/${subject}/_processed`;
 
     // Cache-buster to ensure fresh data
     const cb = `?_=${Date.now()}`;
@@ -2560,16 +2570,28 @@ async function initNavigation() {
   // Expose so reviewer-change handler can call it
   _refreshSubjectsAndStatus = refreshSubjectsAndStatus;
 
-  // Load sites
-  const sites = await DataLoader.loadSites();
-  sites.forEach(site => {
+  // Load projects (returned by /api/sites with displayName etc. for the
+  // ones the reviewer is allowed to see — i.e. status='ready'). Show
+  // displayName in the dropdown; the option value is the project ID.
+  const projects = await DataLoader.loadSites();
+  if (projects.length === 0) {
     const opt = document.createElement('option');
-    opt.value = site;
-    opt.textContent = site;
+    opt.value = '';
+    opt.textContent = '— No active studies — ask the study admin —';
     siteSel.appendChild(opt);
-  });
+  } else {
+    projects.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.displayName || p.id;
+      if (p.description) opt.title = p.description;
+      siteSel.appendChild(opt);
+    });
+  }
+  // Stash for later display lookup (subject info bar etc.)
+  S.projectsById = Object.fromEntries(projects.map(p => [p.id, p]));
 
-  // Site change -> refresh subjects + status
+  // Project change -> refresh subjects + status (variable kept for back-compat)
   siteSel.addEventListener('change', () => refreshSubjectsAndStatus(siteSel.value));
 
   // Load button
@@ -2593,8 +2615,18 @@ async function initNavigation() {
 
       applyLoadedData(data);
 
-      // Update UI
-      document.getElementById('case-label').textContent = `${site} / ${subject}`;
+      // Update UI — use displayName when we have it, with the subject's
+      // per-site labels appended for clinical context. Falls back to the
+      // project ID if displayName isn't loaded for some reason.
+      const proj = (S.projectsById || {})[site] || {};
+      const projDisplay = proj.displayName || site;
+      const subjMeta = (S.currentSubjects || []).find(s => s.name === subject);
+      const labelBits = [];
+      if (subjMeta?.contributingSite) labelBits.push(subjMeta.contributingSite);
+      if (subjMeta?.anatomicalSite)  labelBits.push(subjMeta.anatomicalSite);
+      const labelSuffix = labelBits.length ? `  ·  ${labelBits.join(' / ')}` : '';
+      document.getElementById('case-label').textContent =
+        `${projDisplay} / ${subject}${labelSuffix}`;
       // Sync dropdown selection highlight and trigger dot
       document.querySelectorAll('.subj-item').forEach(el => {
         el.classList.toggle('selected', el.dataset.name === subject);
@@ -2629,6 +2661,40 @@ async function initNavigation() {
       overlay.classList.add('hidden');
     }
   });
+
+  // ── URL parameter auto-load (shareable links) ───────────────────────
+  // Format: index.html?project=CARDIAC&subject=WASHUCARDIAC001
+  // Triggers after the reviewer is logged in (welcome-screen dismissed)
+  // and the project list has been populated. Errors are logged but
+  // non-blocking — the user can still pick manually.
+  const urlParams = new URLSearchParams(window.location.search);
+  const wantedProject = urlParams.get('project') || urlParams.get('site');
+  const wantedSubject = urlParams.get('subject');
+  if (wantedProject && wantedSubject) {
+    // Wait for reviewer + project list to be ready
+    const tryAutoLoad = async () => {
+      const reviewerName = document.getElementById('reviewer-select').value;
+      if (!reviewerName) return false;  // not logged in yet
+      const opt = [...siteSel.options].find(o => o.value === wantedProject);
+      if (!opt) return false;  // project not in list (not ready, or not authorized)
+      siteSel.value = wantedProject;
+      await refreshSubjectsAndStatus(wantedProject);
+      // refreshSubjectsAndStatus populated S.currentSubjects; pick the wanted one
+      const found = (S.currentSubjects || []).find(s => s.name === wantedSubject && s.hasManifest);
+      if (!found) return false;
+      // Programmatically trigger the dropdown selection + Load
+      subjectDropdownSelect(wantedSubject);
+      loadBtn.click();
+      return true;
+    };
+    // Poll briefly while the reviewer gate is still up; most reloads
+    // resolve within a tick after the user picks their name.
+    const interval = setInterval(async () => {
+      const handled = await tryAutoLoad();
+      if (handled || S.currentSubject === wantedSubject) clearInterval(interval);
+    }, 500);
+    setTimeout(() => clearInterval(interval), 30000);  // give up after 30s
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
