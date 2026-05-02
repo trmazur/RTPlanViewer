@@ -711,15 +711,17 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({'exists': False})
 
     def _handle_subject_exists(self, site, subject):
-        """Return whether a subject has already been processed (manifest.json present).
+        """Return whether a subject has already been processed.
 
-        Used by the admin tool to gate re-imports. Re-importing an already-
-        processed subject would silently overwrite its files and re-randomize
-        the plan-letter identity map, silently corrupting any existing
-        rankings that were collected against the previous map. The admin
-        tool calls this endpoint up front and refuses to start an export if
-        the subject already exists; deletion (and ranking-archival) must go
-        through the management page first.
+        Used by the admin tool to gate re-imports. The first positional
+        param is named `site` for backward-compat with the dispatcher,
+        but it now functions as the project ID — they're the same string
+        post-migration.
+
+        Checks both PROJECTS/{id}/{subject}/_processed/manifest.json
+        (primary, post-phase-3) and SITES/{id}/{subject}/_processed/
+        (legacy fallback) so a subject existing in either location
+        triggers the re-import guard.
 
         Response: { "exists": bool, "site": str, "subject": str,
                     "manifestPath": str (only if exists) }
@@ -727,7 +729,15 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
         if not site or not subject:
             self._json_response({'error': 'Missing site or subject'}, 400)
             return
-        manifest_path = SITES_DIR / site / subject / '_processed' / 'manifest.json'
+
+        # Primary: PROJECTS/ (where the admin tool writes post-phase-5)
+        manifest_path = PROJECTS_DIR / site / subject / '_processed' / 'manifest.json'
+        if not manifest_path.exists():
+            # Legacy fallback — pre-migration data still on disk under SITES/
+            legacy_path = SITES_DIR / site / subject / '_processed' / 'manifest.json'
+            if legacy_path.exists():
+                manifest_path = legacy_path
+
         exists = manifest_path.exists()
         resp = {'exists': exists, 'site': site, 'subject': subject}
         if exists:
@@ -1489,23 +1499,30 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
     # ── API: Upload processed data ───────────────────────────────────────
 
     def _handle_upload(self):
-        """Save pre-processed data files from the admin tool."""
+        """Save pre-processed data files from the admin tool.
+
+        Writes to PROJECTS/{project}/{subject}/_processed/. Accepts either
+        `project` or `site` (legacy) in the request body — they refer to
+        the same identifier post-migration. The legacy `site` parameter
+        will be removed in phase 7 cleanup.
+        """
         content_len = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_len)
         data = json.loads(body)
 
-        site = data.get('site', '')
+        # Project (new) or site (legacy) — both name the project ID
+        project = data.get('project') or data.get('site', '')
         subject = data.get('subject', '')
         file_name = data.get('fileName', '')
         file_data = data.get('data', '')
         encoding = data.get('encoding', 'text')  # 'text' or 'base64'
 
-        if not all([site, subject, file_name]):
-            self._json_response({'error': 'Missing fields'}, 400)
+        if not all([project, subject, file_name]):
+            self._json_response({'error': 'Missing fields (need project, subject, fileName)'}, 400)
             return
 
-        # Create _processed directory
-        processed_dir = SITES_DIR / site / subject / '_processed'
+        # Create _processed directory under PROJECTS/
+        processed_dir = PROJECTS_DIR / project / subject / '_processed'
         processed_dir.mkdir(parents=True, exist_ok=True)
 
         # Re-import guard: refuse to overwrite an existing manifest.json.
@@ -1553,20 +1570,23 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
     # ── API: Upload binary data directly ────────────────────────────────
 
     def _handle_upload_binary(self, path):
-        """Save a raw binary file. Path format: /api/upload-binary/{site}/{subject}/{filepath}"""
-        # Parse: /api/upload-binary/CARDIAC/WASHUCARDIAC001/ct_volume.bin.gz
+        """Save a raw binary file. Path format:
+            /api/upload-binary/{project}/{subject}/{filepath}
+        (Was {site} pre-phase-3 — same identifier post-migration.)
+        Writes to PROJECTS/{project}/{subject}/_processed/.
+        """
         parts = path.replace('/api/upload-binary/', '').split('/', 2)
         if len(parts) < 3:
             self._json_response({'error': 'Invalid path'}, 400)
             return
 
-        site, subject, file_name = parts[0], parts[1], parts[2]
+        project, subject, file_name = parts[0], parts[1], parts[2]
 
         content_len = int(self.headers.get('Content-Length', 0))
         print(f"  Receiving binary: {file_name} ({content_len / 1024 / 1024:.1f} MB)")
 
-        # Read in chunks to handle large files
-        processed_dir = SITES_DIR / site / subject / '_processed'
+        # Write to PROJECTS/, not legacy SITES/
+        processed_dir = PROJECTS_DIR / project / subject / '_processed'
         processed_dir.mkdir(parents=True, exist_ok=True)
         file_path = processed_dir / file_name
         file_path.parent.mkdir(parents=True, exist_ok=True)

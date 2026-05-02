@@ -361,28 +361,46 @@
 
 <div class="container">
   <header>
-    <h1>RT Plan Review — Administration Tool</h1>
-    <p>Pre-process DICOM data, validate subjects, map contours, and prepare data for blinded plan review.</p>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+      <div>
+        <h1>RT Plan Review — Administration Tool</h1>
+        <p>Pre-process DICOM data, validate subjects, map contours, and prepare data for blinded plan review.</p>
+      </div>
+      <div id="admin-id-bar" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:12px">
+        <label style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">
+          Logged in as
+        </label>
+        <input type="text" id="admin-reviewer-name"
+               placeholder="Your name"
+               style="padding:5px 10px;background:#fff;border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:13px;min-width:180px">
+        <small id="admin-reviewer-note" style="color:var(--text-dim);font-size:10px">
+          Required for project access (must match reviewers.json)
+        </small>
+      </div>
+    </div>
   </header>
 
-  <!-- Step 1: Site Configuration -->
+  <!-- Step 1: Project + Template -->
   <div class="panel" id="panel-site">
-    <h2><span class="step-num">1</span> Site Configuration</h2>
+    <h2><span class="step-num">1</span> Project &amp; Template</h2>
     <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">
-      Reviewers are configured globally via <code style="background:#2a2a2a;padding:2px 5px;border-radius:3px">reviewers.json</code> in the viewer root directory.
+      Pick the project this subject will be processed into. Projects are created and managed via
+      <a href="manage.html" style="color:var(--accent)">manage.html</a>.
+      Reviewers come from <code style="background:#2a2a2a;padding:2px 5px;border-radius:3px">reviewers.json</code>.
     </p>
     <div class="form-row">
       <div class="form-group">
-        <label>Anatomical Site</label>
-        <select id="site-select">
-          <option value="">— Loading… —</option>
+        <label>Project</label>
+        <select id="site-select" data-as="project">
+          <option value="">— Enter your name first —</option>
         </select>
+        <small id="project-info" style="color:var(--text-dim);font-size:11px;margin-top:4px;display:block"></small>
       </div>
       <div class="form-group">
-        <label>Clinical Goal Template</label>
+        <label>Clinical Goal Template (XML)</label>
         <input type="file" id="template-file" accept=".xml">
       </div>
-      <button class="btn btn-primary" id="save-site-config-btn" disabled>Save Site Config</button>
+      <button class="btn btn-primary" id="save-site-config-btn" disabled>Save Project Config</button>
     </div>
     <div id="template-info" class="hidden" style="margin-top:12px;font-size:13px;color:var(--text-dim)"></div>
   </div>
@@ -401,6 +419,34 @@
     <div class="progress-bar hidden" id="val-progress"><div class="progress-fill" style="width:0%"></div></div>
     <div class="log-area hidden" id="val-log"></div>
     <div class="validation-grid hidden" id="val-results"></div>
+
+    <!-- Per-subject site labels — populated after a successful validation
+         from the project's contributingSites + the global anatomical-sites
+         list. Both labels are required before clinical-goal mapping
+         unlocks. -->
+    <div id="subject-labels-block" class="hidden" style="margin-top:16px;padding:14px 18px;background:#fffceb;border:1px solid #ffcc44;border-radius:6px">
+      <div style="font-weight:700;font-size:14px;margin-bottom:10px">Subject labels</div>
+      <div class="form-row" style="margin-bottom:8px">
+        <div class="form-group">
+          <label>Contributing Site</label>
+          <select id="subject-contributing-site">
+            <option value="">— Pick one —</option>
+          </select>
+          <small style="font-size:11px;color:var(--text-dim);margin-top:4px;display:block">
+            From project's allowed list. Edit the project in <a href="manage.html" target="_blank" style="color:var(--accent)">manage.html</a> to change.
+          </small>
+        </div>
+        <div class="form-group">
+          <label>Anatomical Site</label>
+          <select id="subject-anatomical-site">
+            <option value="">— Pick one —</option>
+          </select>
+          <small style="font-size:11px;color:var(--text-dim);margin-top:4px;display:block">
+            From global list in <code>_anatomical_sites.json</code>.
+          </small>
+        </div>
+      </div>
+    </div>
 
     <!-- Plan-count confirmation: gates Step 3 (contour mapping). Shown
          only after a successful validation pass; the admin must confirm
@@ -531,9 +577,9 @@
     </p>
     <div class="form-row">
       <div class="form-group">
-        <label>Site</label>
-        <select id="agg-site-select">
-          <option value="">— Select —</option>
+        <label>Project</label>
+        <select id="agg-site-select" data-as="project">
+          <option value="">— Enter your name first —</option>
         </select>
       </div>
       <button class="btn btn-primary" id="load-rankings-btn">Load Rankings</button>
@@ -2014,37 +2060,127 @@ function randomizeIdentity(folderNames) {
 // UI Event Handlers
 // =============================================================================
 
-// --- Auto-populate sites on load ---
-async function loadSites() {
-  const sel = document.getElementById('site-select');
-  sel.innerHTML = '<option value="">— Select —</option>';
+// --- Reviewer-name input: persists across reloads via sessionStorage,
+//     also reads/writes the same key the management page uses so logging
+//     in there gives you access here too. ---
+const ADMIN_REVIEWER_KEY = 'rtv_super_user';
+
+function getAdminReviewer() {
+  const input = document.getElementById('admin-reviewer-name');
+  if (input?.value?.trim()) return input.value.trim();
+  // Fallback: management-page session blob, if any
   try {
-    const resp = await fetch(`/api/sites?_=${Date.now()}`);
-    const data = await resp.json();
-    const sites = data.sites || [];
-    sites.forEach(site => {
-      const opt = document.createElement('option');
-      opt.value = site;
-      opt.textContent = site;
-      sel.appendChild(opt);
-    });
-    // Also populate the aggregation (Step 6) dropdown
-    const aggSel = document.getElementById('agg-site-select');
-    if (aggSel) {
-      aggSel.innerHTML = '<option value="">— Select —</option>';
-      sites.forEach(site => {
-        const opt = document.createElement('option');
-        opt.value = site;
-        opt.textContent = site;
-        aggSel.appendChild(opt);
-      });
+    const raw = sessionStorage.getItem(ADMIN_REVIEWER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.name) return parsed.name;
     }
+  } catch (_) {}
+  return '';
+}
+
+function persistAdminReviewer(name) {
+  if (name) sessionStorage.setItem(ADMIN_REVIEWER_KEY, JSON.stringify({ name }));
+}
+
+// --- Project loading ---
+// Loads projects from /api/projects?reviewer=X. Populates both the Step 1
+// project picker and the Step 6 aggregation picker. Failures (no name,
+// not authorized, server down) all fall through to a clear placeholder
+// option so the user knows what to fix.
+async function loadProjects() {
+  const projSel = document.getElementById('site-select');     // Step 1 (kept ID for back-compat)
+  const aggSel = document.getElementById('agg-site-select');  // Step 6
+  const reviewer = getAdminReviewer();
+
+  function setPlaceholder(text) {
+    [projSel, aggSel].forEach(s => {
+      if (!s) return;
+      s.innerHTML = `<option value="">— ${text} —</option>`;
+    });
+  }
+
+  if (!reviewer) {
+    setPlaceholder('Enter your name above');
+    return;
+  }
+
+  try {
+    const resp = await fetch(`/api/projects?reviewer=${encodeURIComponent(reviewer)}&_=${Date.now()}`);
+    if (!resp.ok) {
+      if (resp.status === 403) {
+        setPlaceholder('Not authorized — name not in super-user list');
+      } else {
+        setPlaceholder(`Server error (HTTP ${resp.status})`);
+      }
+      return;
+    }
+    const data = await resp.json();
+    App._projectIndex = {};  // map id → config, used when picking is set
+    const projects = data.projects || [];
+
+    if (projects.length === 0) {
+      setPlaceholder('No projects yet — create one in manage.html');
+      return;
+    }
+
+    [projSel, aggSel].forEach(sel => {
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— Select —</option>';
+      projects.forEach(p => {
+        App._projectIndex[p.id] = p;
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const statusBadge = p.status === 'ready' ? ' [ready]'
+                          : p.status === 'closed' ? ' [closed]'
+                          : ' [draft]';
+        opt.textContent = `${p.displayName || p.id}${statusBadge}`;
+        sel.appendChild(opt);
+      });
+    });
   } catch (e) {
-    sel.innerHTML = '<option value="">— Server not reachable —</option>';
-    console.warn('Failed to load sites:', e);
+    setPlaceholder('Server not reachable');
+    console.warn('Failed to load projects:', e);
   }
 }
-loadSites();
+
+// --- Anatomical site loading (global preset list) ---
+async function loadAnatomicalSites() {
+  try {
+    const resp = await fetch(`/api/anatomical-sites?_=${Date.now()}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const sel = document.getElementById('subject-anatomical-site');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Pick one —</option>';
+    (data.options || []).forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o; opt.textContent = o;
+      sel.appendChild(opt);
+    });
+  } catch (e) { console.warn('Failed to load anatomical sites:', e); }
+}
+
+// On page load: prime the reviewer field from sessionStorage if available,
+// then load projects + anatomical sites
+(function initAdminIdentityBar() {
+  const input = document.getElementById('admin-reviewer-name');
+  if (!input) return;
+  const saved = (() => {
+    try {
+      const raw = sessionStorage.getItem(ADMIN_REVIEWER_KEY);
+      return raw ? (JSON.parse(raw)?.name || '') : '';
+    } catch (_) { return ''; }
+  })();
+  if (saved) input.value = saved;
+  input.addEventListener('change', () => {
+    persistAdminReviewer(input.value.trim());
+    loadProjects();
+  });
+  input.addEventListener('blur', () => persistAdminReviewer(input.value.trim()));
+})();
+loadProjects();
+loadAnatomicalSites();
 
 // --- Template loading ---
 document.getElementById('template-file').addEventListener('change', async (e) => {
@@ -2064,18 +2200,51 @@ document.getElementById('template-file').addEventListener('change', async (e) =>
   document.getElementById('save-site-config-btn').disabled = false;
 });
 
-// --- Save site config ---
+// --- Save project config ---
+// Captures the selected project + loaded XML template into App.siteConfig.
+// (Field name `site` retained for backward compat throughout the rest of
+// the admin code — internally it's now a project ID. Phase 7 cleanup will
+// rename. Both `project` and `site` flow through to the manifest.)
 document.getElementById('save-site-config-btn').addEventListener('click', () => {
-  const site = document.getElementById('site-select').value;
-  if (!site) { App.notify('Please select an anatomical site.', 'error'); return; }
+  const projectId = document.getElementById('site-select').value;
+  if (!projectId) { App.notify('Please select a project.', 'error'); return; }
+
+  const projectInfo = App._projectIndex?.[projectId] || null;
 
   App.siteConfig = {
-    site,
+    site: projectId,           // legacy field name — used as project ID throughout
+    project: projectId,        // explicit new field
+    projectInfo,               // includes contributingSites, displayName, status, etc.
     templateName: App.templateXml ? 'loaded' : '',
   };
 
+  // Populate the contributing-site dropdown from the project's allowed list
+  const contribSel = document.getElementById('subject-contributing-site');
+  if (contribSel) {
+    contribSel.innerHTML = '<option value="">— Pick one —</option>';
+    (projectInfo?.contributingSites || []).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s; opt.textContent = s;
+      contribSel.appendChild(opt);
+    });
+    if ((projectInfo?.contributingSites || []).length === 0) {
+      contribSel.innerHTML = '<option value="">— No sites configured for this project —</option>';
+    }
+  }
+
+  // Show project info note under the dropdown
+  const note = document.getElementById('project-info');
+  if (note && projectInfo) {
+    const statusColor = projectInfo.status === 'ready' ? 'var(--green)'
+                      : projectInfo.status === 'closed' ? 'var(--yellow)'
+                      : 'var(--text-dim)';
+    note.innerHTML = `Project status: <strong style="color:${statusColor}">${projectInfo.status}</strong>` +
+      ` &middot; Contributing sites: ${(projectInfo.contributingSites || []).length || '<em>none yet</em>'}` +
+      ` &middot; Owners: ${(projectInfo.owners || []).join(', ')}`;
+  }
+
   document.getElementById('validate-btn').disabled = false;
-  App.notify('Site configuration saved.');
+  App.notify('Project configuration saved.');
 });
 
 // --- Subject folder selection ---
@@ -2280,8 +2449,10 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
   App.identityMap = randomizeIdentity(folderNames);
 
   if (allValid) {
-    // Show plan-count confirmation UI. Step 3 stays locked until the user
-    // ticks the confirmation checkbox.
+    // Show per-subject site-label block + plan-count confirmation UI.
+    // Step 3 stays locked until both labels are picked AND the plan count
+    // is confirmed.
+    showSubjectLabelsBlock();
     showPlanCountConfirmation();
     if (App.templateStructures.length === 0) {
       App.log(logArea, `\nSubject is valid. Load a clinical goal template (Step 1) before confirming the plan count.`, 'log-warn');
@@ -2296,6 +2467,30 @@ document.getElementById('validate-btn').addEventListener('click', async () => {
 // =============================================================================
 // Plan-Count Confirmation (gates Step 3)
 // =============================================================================
+
+// Show the per-subject site-label block (contributing site + anatomical site).
+// Called when validation succeeds. Both labels are required before downstream
+// steps unlock — enforced inside the plan-count confirmation handler.
+function showSubjectLabelsBlock() {
+  document.getElementById('subject-labels-block').classList.remove('hidden');
+  // Pre-fill from existing manifest if re-validating an in-progress import
+  // (otherwise users would have to re-pick after a fresh validation)
+  const contribSel = document.getElementById('subject-contributing-site');
+  const anatSel = document.getElementById('subject-anatomical-site');
+  if (App.contributingSite) contribSel.value = App.contributingSite;
+  if (App.anatomicalSite) anatSel.value = App.anatomicalSite;
+}
+
+// Capture the per-subject label values into App state. Returns null if
+// either is missing, otherwise an object { contributingSite, anatomicalSite }.
+function readSubjectLabels() {
+  const contributing = (document.getElementById('subject-contributing-site')?.value || '').trim();
+  const anatomical = (document.getElementById('subject-anatomical-site')?.value || '').trim();
+  if (!contributing || !anatomical) return null;
+  App.contributingSite = contributing;
+  App.anatomicalSite = anatomical;
+  return { contributingSite: contributing, anatomicalSite: anatomical };
+}
 
 // Populate and reveal the confirmation block based on current App state.
 function showPlanCountConfirmation() {
@@ -2338,6 +2533,14 @@ document.getElementById('pcc-checkbox').addEventListener('change', (e) => {
   if (App.planConfirmed) {
     if (App.templateStructures.length === 0) {
       App.log('val-log', `Cannot proceed: load a clinical goal template (Step 1) first.`, 'log-warn');
+      e.target.checked = false;
+      App.planConfirmed = false;
+      return;
+    }
+    // Require both per-subject labels before unlocking downstream steps
+    const labels = readSubjectLabels();
+    if (!labels) {
+      App.log('val-log', `Cannot proceed: pick BOTH a Contributing Site and an Anatomical Site (above the confirmation checkbox).`, 'log-warn');
       e.target.checked = false;
       App.planConfirmed = false;
       return;
@@ -2755,12 +2958,23 @@ document.getElementById('export-btn').addEventListener('click', async () => {
   // viewer reads this to know how many plan rows / rank rows to render.
   const planLetters = Object.values(App.identityMap).sort();
 
+  // Capture per-subject labels at export time too, in case the user
+  // changed their mind after confirming the plan count.
+  const labels = readSubjectLabels();
+  if (!labels) {
+    App.log(logArea, 'ERROR: Pick a Contributing Site and Anatomical Site (Step 2) before exporting.', 'log-err');
+    return;
+  }
+
   const manifest = {
     subject: App.subjectPath,
-    site: App.siteConfig?.site || 'UNKNOWN',
+    project: App.siteConfig?.project || App.siteConfig?.site || 'UNKNOWN',  // canonical
+    site: App.siteConfig?.site || 'UNKNOWN',  // legacy mirror, removed in phase 7
+    contributingSite: labels.contributingSite,
+    anatomicalSite: labels.anatomicalSite,
     validatedAt: new Date().toISOString(),
-    plans: planLetters,                    // NEW: explicit plan list for variable plan count
-    numPlans: planLetters.length,          // NEW: convenience field, matches plans.length
+    plans: planLetters,                    // explicit plan list for variable plan count
+    numPlans: planLetters.length,          // convenience field, matches plans.length
     identityMap: App.identityMap,
     planFolders: App.planFolders,
     commonStructures: App.commonStructures,
@@ -2866,15 +3080,18 @@ document.getElementById('export-btn').addEventListener('click', async () => {
 
   App.setProgress('export-progress', 85);
 
-  // Upload files to server (writes directly to _processed/ directory)
-  const site = App.siteConfig?.site || 'UNKNOWN';
+  // Upload files to server. Server writes to PROJECTS/{project}/{subject}/_processed/.
+  // The wire field is named `project`; `site` is sent too for compat with any
+  // older server build that may still be in flight (server reads either).
+  const project = App.siteConfig?.project || App.siteConfig?.site || 'UNKNOWN';
+  const site = project;  // legacy mirror — same value
   const subject = App.subjectPath;
 
   async function uploadJSON(fileName, data) {
     const resp = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ site, subject, fileName, data: JSON.stringify(data), encoding: 'text' }),
+      body: JSON.stringify({ project, site, subject, fileName, data: JSON.stringify(data), encoding: 'text' }),
     });
     if (!resp.ok) {
       // Surface the server's human-readable error message if available
