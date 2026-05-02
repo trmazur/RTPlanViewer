@@ -1,0 +1,20 @@
+{
+  "options": [
+    "Brain",
+    "Head & Neck",
+    "Lung",
+    "Breast",
+    "Esophagus",
+    "Heart",
+    "Liver",
+    "Pancreas",
+    "Kidney",
+    "Bone Mets",
+    "Spine",
+    "Prostate",
+    "Bladder",
+    "Cervix",
+    "Sarcoma",
+    "Other"
+  ]
+}

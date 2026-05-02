@@ -30,16 +30,49 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 
 # Resolve the directory this script lives in
 VIEWER_DIR = Path(__file__).resolve().parent
+
+# ── Legacy site-keyed data (read-only during transition) ─────────────────
+# Existing data lives under SITES/. New data lives under PROJECTS/. The
+# auto-migration script (Phase 3) will move everything from SITES/ to
+# PROJECTS/. Until then both layouts coexist; existing endpoints continue
+# to read from SITES/.
 SITES_DIR = VIEWER_DIR / 'SITES'
 RANKINGS_DIR = SITES_DIR / '_rankings'
+
+# ── New project-keyed data ───────────────────────────────────────────────
+# Each project is a directory under PROJECTS/ containing _project_config.json
+# and one subdirectory per subject (containing _processed/). Rankings live
+# in a flat directory at the top of PROJECTS/.
+PROJECTS_DIR = VIEWER_DIR / 'PROJECTS'
+PROJECT_RANKINGS_DIR = PROJECTS_DIR / '_rankings'
+PROJECT_ARCHIVED_DIR = PROJECTS_DIR / '_archived'
+PROJECT_RANKINGS_ARCHIVE_DIR = PROJECT_ARCHIVED_DIR / 'rankings'
+PROJECT_SUBJECTS_ARCHIVE_DIR = PROJECT_ARCHIVED_DIR / 'subjects'
+PROJECT_ADMIN_LOG_FILE = PROJECTS_DIR / '_admin_log.json'
+
+# ── Config files ─────────────────────────────────────────────────────────
 SUPER_USERS_FILE = VIEWER_DIR / '_super_users.json'
+ANATOMICAL_SITES_FILE = VIEWER_DIR / '_anatomical_sites.json'
+
+# Project config filename (one per project directory)
+PROJECT_CONFIG_FILENAME = '_project_config.json'
+
+# Valid project status values (forward-only progression in the UI:
+# draft → ready → closed; reverting to draft is allowed but rare).
+VALID_PROJECT_STATUSES = ('draft', 'ready', 'closed')
 
 
 # ── Super-user permissions ───────────────────────────────────────────────
-# Permission config lives in _super_users.json at the viewer root, structured
-# as { "<site>": [reviewer names], "*": [global super-users] }. A reviewer is
-# a super-user for a site if they appear in '*' or in that site's array.
-# Missing/unreadable file = no one is super (fail safe).
+# _super_users.json schema (new):
+#   { "global": ["Reviewer Name", ...] }
+# Legacy schema (still supported during transition):
+#   { "*": [...], "<site_name>": [...], ... }
+# The "*" key is treated as a synonym for "global". Site-keyed entries from
+# the legacy schema continue to authorize site-keyed (old) endpoints.
+#
+# Project-level access is a separate concern: a reviewer is authorized for
+# a specific project if they're a global super-user OR are listed in that
+# project's `owners` array (see _can_access_project below).
 
 def _load_super_users():
     """Return the super-user permission map, or {} if unreadable."""
@@ -53,20 +86,37 @@ def _load_super_users():
         return {}
 
 
+def _global_super_users():
+    """Return the list of global super-users, merging legacy "*" and new
+    "global" keys for transitional compatibility."""
+    config = _load_super_users()
+    out = set()
+    for key in ('global', '*'):
+        users = config.get(key, [])
+        if isinstance(users, list):
+            out.update(users)
+    return out
+
+
 def _is_super_user(reviewer, site=None):
-    """True if `reviewer` has super-user rights for `site` (or for any site
-    if site is None — used when listing across-site data)."""
+    """Legacy site-keyed permission check.
+
+    True if `reviewer` has super-user rights for `site` (or for any site
+    if site is None — used when listing across-site data). Used by the
+    legacy site-keyed admin endpoints. New code paths should use
+    `_can_access_project()` instead.
+    """
     if not reviewer:
         return False
-    config = _load_super_users()
-    # Global super-users always pass
-    globals_list = config.get('*', [])
-    if isinstance(globals_list, list) and reviewer in globals_list:
+    # Global super-users always pass — recognize both the legacy "*" key
+    # and the new "global" key.
+    if reviewer in _global_super_users():
         return True
+    config = _load_super_users()
     if site is None:
         # Any site: check membership in any per-site list
         for k, v in config.items():
-            if k.startswith('_') or k == '*':
+            if k.startswith('_') or k in ('*', 'global'):
                 continue
             if isinstance(v, list) and reviewer in v:
                 return True
@@ -76,19 +126,181 @@ def _is_super_user(reviewer, site=None):
 
 
 def _accessible_sites(reviewer):
-    """Return the set of site names this super-user can access, or None for
-    global access (all sites). Empty set = no access."""
-    config = _load_super_users()
-    globals_list = config.get('*', [])
-    if isinstance(globals_list, list) and reviewer in globals_list:
+    """Legacy site-keyed accessibility helper.
+
+    Return the set of site names this super-user can access, or None for
+    global access (all sites). Empty set = no access. Used by legacy
+    site-keyed listing endpoints.
+    """
+    if reviewer in _global_super_users():
         return None  # all sites
+    config = _load_super_users()
     sites = set()
     for k, v in config.items():
-        if k.startswith('_') or k == '*':
+        if k.startswith('_') or k in ('*', 'global'):
             continue
         if isinstance(v, list) and reviewer in v:
             sites.add(k)
     return sites
+
+
+# ── Project-level helpers ────────────────────────────────────────────────
+# These are the new code paths. They coexist with the legacy site-keyed
+# helpers above during the transition. Phase 2 will add HTTP endpoints
+# that surface them; Phase 3 will run a one-shot migration that moves
+# data from SITES/ to PROJECTS/.
+
+# Project IDs become directory names. Restrictions:
+#   - 3 to 80 characters
+#   - alnum + dot/underscore/hyphen
+#   - must contain at least one alphanumeric character (rejects "..", "-", etc.)
+#   - cannot start with '_' (reserved for special dirs like _rankings)
+#   - cannot contain '..' anywhere (path-traversal guard)
+_PROJECT_ID_RE = re.compile(r'^(?!_)[A-Za-z0-9._-]+$')
+
+
+def _is_valid_project_id(project_id):
+    """Project IDs become directory names — sanity-check character set."""
+    if not project_id or not isinstance(project_id, str):
+        return False
+    if len(project_id) < 3 or len(project_id) > 80:
+        return False
+    if '..' in project_id:
+        return False
+    if not _PROJECT_ID_RE.match(project_id):
+        return False
+    # Require at least one alphanumeric character (rejects "..", "-", "._.", etc.)
+    return any(c.isalnum() for c in project_id)
+
+
+def _project_dir(project_id):
+    """Return the project's root directory Path, validated against
+    path-traversal. Raises ValueError if id is invalid."""
+    if not _is_valid_project_id(project_id):
+        raise ValueError(f'Invalid project id: {project_id!r}')
+    return PROJECTS_DIR / project_id
+
+
+def _project_config_path(project_id):
+    return _project_dir(project_id) / PROJECT_CONFIG_FILENAME
+
+
+def _load_anatomical_sites():
+    """Return the global anatomical-site option list (sorted as written
+    in the config file). Falls back to an empty list if the config is
+    missing or malformed — the admin tool will surface this gracefully."""
+    if not ANATOMICAL_SITES_FILE.exists():
+        return []
+    try:
+        with open(ANATOMICAL_SITES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        opts = data.get('options') if isinstance(data, dict) else data
+        if isinstance(opts, list):
+            return [s for s in opts if isinstance(s, str) and s.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _load_project(project_id):
+    """Read one project's config. Returns None if not found / unreadable.
+    Returns the parsed dict on success."""
+    try:
+        path = _project_config_path(project_id)
+    except ValueError:
+        return None
+    if not path.exists():
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _save_project(project_id, config):
+    """Write one project's config. Creates the project directory if needed.
+    Caller is responsible for ensuring the config dict is well-formed."""
+    project_dir = _project_dir(project_id)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    path = _project_config_path(project_id)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2)
+
+
+def _list_all_projects():
+    """Yield (project_id, config_dict) for every project on disk. Skips
+    directories without a valid _project_config.json."""
+    if not PROJECTS_DIR.exists():
+        return
+    for entry in sorted(PROJECTS_DIR.iterdir()):
+        if not entry.is_dir() or entry.name.startswith('_'):
+            continue
+        if not _is_valid_project_id(entry.name):
+            continue
+        cfg = _load_project(entry.name)
+        if cfg is not None:
+            yield entry.name, cfg
+
+
+def _can_access_project(reviewer, project_id):
+    """Project-level permission check. True if:
+       - reviewer is a global super-user, OR
+       - reviewer is listed in the project's `owners` array.
+    A reviewer who can_access can list, edit, and delete the project."""
+    if not reviewer:
+        return False
+    if reviewer in _global_super_users():
+        return True
+    cfg = _load_project(project_id)
+    if not cfg:
+        return False
+    owners = cfg.get('owners', [])
+    return isinstance(owners, list) and reviewer in owners
+
+
+def _visible_projects(reviewer, *, only_ready=False):
+    """List of (project_id, config) tuples this reviewer can see.
+
+    For super-users (manage page): all projects they own + (if global) all
+    projects on disk.
+    For regular reviewers (viewer page): pass only_ready=True to filter to
+    projects whose status == 'ready'.
+    """
+    is_global = reviewer in _global_super_users()
+    out = []
+    for pid, cfg in _list_all_projects():
+        if only_ready and cfg.get('status') != 'ready':
+            continue
+        if not only_ready:
+            # Permission filter (only relevant for super-user / management)
+            owners = cfg.get('owners', [])
+            if not (is_global or (isinstance(owners, list) and reviewer in owners)):
+                continue
+        out.append((pid, cfg))
+    return out
+
+
+def _new_project_config(project_id, *, display_name, created_by,
+                        contributing_sites=None, owners=None,
+                        description=''):
+    """Build a fresh project config dict with sensible defaults. Status
+    starts as 'draft'. Caller passes the ID and creator; everything else
+    has a reasonable default."""
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        'id': project_id,
+        'displayName': display_name or project_id,
+        'description': description or '',
+        'owners': list(owners) if owners else [created_by],
+        'contributingSites': list(contributing_sites or []),
+        'status': 'draft',
+        'createdAt': now,
+        'createdBy': created_by,
+        'readyAt': None,
+        'closedAt': None,
+    }
 
 
 # ── Delete / archive helpers ─────────────────────────────────────────────
