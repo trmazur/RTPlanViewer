@@ -303,6 +303,44 @@ def _new_project_config(project_id, *, display_name, created_by,
     }
 
 
+def _count_project_subjects(project_id):
+    """Return number of processed subjects in a project. A "processed"
+    subject has a _processed/manifest.json. Work-in-progress directories
+    are not counted."""
+    try:
+        pdir = _project_dir(project_id)
+    except ValueError:
+        return 0
+    if not pdir.exists():
+        return 0
+    n = 0
+    for entry in pdir.iterdir():
+        if not entry.is_dir() or entry.name.startswith('_'):
+            continue
+        if (entry / '_processed' / 'manifest.json').exists():
+            n += 1
+    return n
+
+
+def _append_project_audit(entry):
+    """Append one entry to the project-side audit log. Distinct from the
+    legacy ADMIN_LOG_FILE under SITES/ — phase 3 migration will merge the
+    two on first run."""
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    log = []
+    if PROJECT_ADMIN_LOG_FILE.exists():
+        try:
+            with open(PROJECT_ADMIN_LOG_FILE, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, list):
+                log = loaded
+        except Exception:
+            log = []  # corrupt — start fresh
+    log.append(entry)
+    with open(PROJECT_ADMIN_LOG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(log, f, indent=2)
+
+
 # ── Delete / archive helpers ─────────────────────────────────────────────
 # All destructive admin actions go through these helpers so the
 # archive-on-delete + audit-log behavior is consistent.
@@ -525,6 +563,17 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             except (ValueError, TypeError):
                 limit = 200
             self._handle_admin_audit_log(reviewer, limit)
+        # ── Projects (phase 2) ──────────────────────────────────────────
+        elif path == '/api/anatomical-sites':
+            self._handle_anatomical_sites()
+        elif path == '/api/projects':
+            reviewer = params.get('reviewer', [''])[0]
+            only_ready = params.get('onlyReady', ['false'])[0].lower() in ('true', '1', 'yes')
+            self._handle_projects_list(reviewer, only_ready)
+        elif path.startswith('/api/projects/'):
+            project_id = path[len('/api/projects/'):]
+            reviewer = params.get('reviewer', [''])[0]
+            self._handle_project_get(reviewer, project_id)
         else:
             super().do_GET()
 
@@ -543,6 +592,29 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_admin_delete_rankings()
         elif parsed.path == '/api/admin/delete-subjects':
             self._handle_admin_delete_subjects()
+        # ── Projects (phase 2) ──────────────────────────────────────────
+        elif parsed.path == '/api/projects':
+            self._handle_project_create()
+        else:
+            self.send_error(404, 'Not found')
+
+    def do_PATCH(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith('/api/projects/'):
+            project_id = parsed.path[len('/api/projects/'):]
+            params = urllib.parse.parse_qs(parsed.query)
+            reviewer = params.get('reviewer', [''])[0]
+            self._handle_project_update(reviewer, project_id)
+        else:
+            self.send_error(404, 'Not found')
+
+    def do_DELETE(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith('/api/projects/'):
+            project_id = parsed.path[len('/api/projects/'):]
+            params = urllib.parse.parse_qs(parsed.query)
+            reviewer = params.get('reviewer', [''])[0]
+            self._handle_project_delete(reviewer, project_id)
         else:
             self.send_error(404, 'Not found')
 
@@ -554,7 +626,7 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
 
     def _cors_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
 
     def _json_response(self, data, status=200):
@@ -789,6 +861,309 @@ class ViewerHandler(http.server.SimpleHTTPRequestHandler):
                 })
 
         self._json_response({'rankings': rankings})
+
+    # ── API: Projects (phase 2) ─────────────────────────────────────────
+
+    def _handle_anatomical_sites(self):
+        """Return the global anatomical-site option list. No auth required —
+        this is a public preset list used by the admin tool and management
+        page when populating dropdowns."""
+        self._json_response({'options': _load_anatomical_sites()})
+
+    def _handle_projects_list(self, reviewer, only_ready):
+        """List projects. Two modes:
+
+        - only_ready=True: viewer-mode listing. Returns all projects whose
+          status == 'ready'. No auth required (any reviewer can see ready
+          projects). Response is trimmed to fields the viewer needs.
+
+        - only_ready=False: management-mode listing. Returns projects the
+          requesting reviewer is authorized to see (global super-users see
+          all; project owners see theirs). Returns 403 if reviewer is not
+          a super-user (or any project's owner)."""
+        if only_ready:
+            projects = []
+            for pid, cfg in _list_all_projects():
+                if cfg.get('status') == 'ready':
+                    projects.append({
+                        'id': pid,
+                        'displayName': cfg.get('displayName', pid),
+                        'description': cfg.get('description', ''),
+                        'subjectCount': _count_project_subjects(pid),
+                    })
+            self._json_response({'projects': projects})
+            return
+
+        # Management mode — auth required
+        is_global = reviewer in _global_super_users()
+        # Allow if global super-user or owner of at least one project
+        any_visible = is_global or any(
+            isinstance(cfg.get('owners'), list) and reviewer in cfg.get('owners', [])
+            for _, cfg in _list_all_projects()
+        )
+        if not any_visible:
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+
+        projects = []
+        for pid, cfg in _visible_projects(reviewer, only_ready=False):
+            projects.append({
+                **cfg,
+                'subjectCount': _count_project_subjects(pid),
+            })
+        self._json_response({
+            'projects': projects,
+            'isGlobalSuperUser': is_global,
+        })
+
+    def _handle_project_get(self, reviewer, project_id):
+        """Return one project's full config. Authorized to anyone who can
+        access the project (global super-user or listed owner) OR to any
+        reviewer if the project is in 'ready' status."""
+        if not _is_valid_project_id(project_id):
+            self._json_response({'error': 'Invalid project id'}, 400)
+            return
+        cfg = _load_project(project_id)
+        if not cfg:
+            self._json_response({'error': 'Project not found'}, 404)
+            return
+        # Ready projects readable by anyone (the viewer needs this)
+        if cfg.get('status') == 'ready':
+            self._json_response({
+                **cfg,
+                'subjectCount': _count_project_subjects(project_id),
+            })
+            return
+        # Otherwise, super-user or owner only
+        if not _can_access_project(reviewer, project_id):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+        self._json_response({
+            **cfg,
+            'subjectCount': _count_project_subjects(project_id),
+        })
+
+    def _handle_project_create(self):
+        """Create a new project. Body:
+          { reviewer, id, displayName, description?, contributingSites?, owners? }
+        Only global super-users may create projects.
+        """
+        try:
+            body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            data = json.loads(body)
+        except Exception:
+            self._json_response({'error': 'Invalid JSON body'}, 400)
+            return
+
+        reviewer = (data.get('reviewer') or '').strip()
+        # Only global super-users can mint new projects. Per-project owners
+        # who are not also global must be added by a global super-user.
+        if reviewer not in _global_super_users():
+            self._json_response({'error': 'Only global super-users may create projects'}, 403)
+            return
+
+        project_id = (data.get('id') or '').strip()
+        if not _is_valid_project_id(project_id):
+            self._json_response({
+                'error': 'Invalid project id (3-80 chars, alphanumeric/dot/underscore/hyphen, no leading underscore)',
+            }, 400)
+            return
+        # Refuse collisions
+        if _project_config_path(project_id).exists():
+            self._json_response({'error': f'Project {project_id} already exists'}, 409)
+            return
+
+        display_name = (data.get('displayName') or '').strip() or project_id
+        description = (data.get('description') or '').strip()
+        contributing = data.get('contributingSites', [])
+        if not isinstance(contributing, list):
+            contributing = []
+        owners = data.get('owners', [])
+        if not isinstance(owners, list) or not owners:
+            owners = [reviewer]
+
+        cfg = _new_project_config(
+            project_id,
+            display_name=display_name,
+            created_by=reviewer,
+            description=description,
+            contributing_sites=[str(s).strip() for s in contributing if str(s).strip()],
+            owners=[str(o).strip() for o in owners if str(o).strip()],
+        )
+        try:
+            _save_project(project_id, cfg)
+        except Exception as e:
+            self._json_response({'error': f'Could not save project: {e}'}, 500)
+            return
+
+        _append_project_audit({
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'super_user': reviewer,
+            'action': 'create_project',
+            'project': project_id,
+            'config': cfg,
+        })
+        self._json_response({'project': cfg}, 201)
+
+    # Fields modifiable via PATCH. Anything else in the body is ignored —
+    # explicit allowlist prevents accidental clobbering of id, createdAt,
+    # createdBy, etc.
+    _PROJECT_PATCH_FIELDS = (
+        'displayName', 'description', 'owners', 'contributingSites', 'status',
+    )
+
+    def _handle_project_update(self, reviewer, project_id):
+        """PATCH /api/projects/{id} — update specific fields.
+
+        Body is a JSON object with any subset of the patch-allowed fields.
+        Status transitions auto-stamp readyAt / closedAt as appropriate.
+        Only owners (or global super-users) may patch a project.
+        """
+        if not _is_valid_project_id(project_id):
+            self._json_response({'error': 'Invalid project id'}, 400)
+            return
+        if not _can_access_project(reviewer, project_id):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+
+        try:
+            body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            patch = json.loads(body) if body else {}
+        except Exception:
+            self._json_response({'error': 'Invalid JSON body'}, 400)
+            return
+
+        cfg = _load_project(project_id)
+        if not cfg:
+            self._json_response({'error': 'Project not found'}, 404)
+            return
+
+        # Validate status transition
+        old_status = cfg.get('status', 'draft')
+        new_status = patch.get('status')
+        if new_status is not None and new_status not in VALID_PROJECT_STATUSES:
+            self._json_response({
+                'error': f'Invalid status {new_status!r}. Must be one of {list(VALID_PROJECT_STATUSES)}',
+            }, 400)
+            return
+
+        # Apply allowed fields only
+        changed = {}
+        for field in self._PROJECT_PATCH_FIELDS:
+            if field not in patch:
+                continue
+            val = patch[field]
+            if field in ('owners', 'contributingSites'):
+                if not isinstance(val, list):
+                    self._json_response({'error': f'{field} must be an array'}, 400)
+                    return
+                val = [str(x).strip() for x in val if str(x).strip()]
+                if field == 'owners' and not val:
+                    self._json_response({'error': 'owners cannot be empty'}, 400)
+                    return
+            elif field in ('displayName', 'description', 'status'):
+                if not isinstance(val, str):
+                    self._json_response({'error': f'{field} must be a string'}, 400)
+                    return
+                val = val.strip()
+            if cfg.get(field) != val:
+                changed[field] = {'from': cfg.get(field), 'to': val}
+                cfg[field] = val
+
+        # Auto-stamp transition timestamps. We always re-stamp on every
+        # transition INTO the state (so re-flipping draft→ready→draft→ready
+        # records the latest readyAt). closedAt is sticky per occurrence.
+        now = datetime.now(timezone.utc).isoformat()
+        if 'status' in patch:
+            if new_status == 'ready' and old_status != 'ready':
+                cfg['readyAt'] = now
+            if new_status == 'closed' and old_status != 'closed':
+                cfg['closedAt'] = now
+            # If returning to draft, leave readyAt/closedAt as-is so the
+            # previous transition timestamps are preserved as history.
+
+        if not changed:
+            self._json_response({'project': cfg, 'noChange': True})
+            return
+
+        try:
+            _save_project(project_id, cfg)
+        except Exception as e:
+            self._json_response({'error': f'Could not save project: {e}'}, 500)
+            return
+
+        _append_project_audit({
+            'timestamp': now,
+            'super_user': reviewer,
+            'action': 'update_project',
+            'project': project_id,
+            'changes': changed,
+        })
+        self._json_response({'project': cfg, 'changed': list(changed.keys())})
+
+    def _handle_project_delete(self, reviewer, project_id):
+        """DELETE /api/projects/{id} — remove a project.
+
+        Refuses if any subjects exist under the project (forces explicit
+        subject-by-subject deletion through the existing subject-delete
+        flow first). The project config is archived under
+        PROJECTS/_archived/projects/ before the directory is removed.
+        Only owners or global super-users may delete.
+        """
+        if not _is_valid_project_id(project_id):
+            self._json_response({'error': 'Invalid project id'}, 400)
+            return
+        if not _can_access_project(reviewer, project_id):
+            self._json_response({'error': 'Not authorized'}, 403)
+            return
+        cfg = _load_project(project_id)
+        if not cfg:
+            self._json_response({'error': 'Project not found'}, 404)
+            return
+
+        n_subjects = _count_project_subjects(project_id)
+        if n_subjects > 0:
+            self._json_response({
+                'error': (f'Project has {n_subjects} processed subject(s). '
+                          'Delete subjects first via the management page.'),
+                'subjectCount': n_subjects,
+            }, 409)
+            return
+
+        # Archive the config (small file) so deletion is reversible
+        archive_root = PROJECT_ARCHIVED_DIR / 'projects'
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archive_name = f'{_safe_timestamp_for_filename()}_{_safe_filename_chunk(project_id)}.json'
+        archive_path = archive_root / archive_name
+        with open(archive_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                '_archive_meta': {
+                    'archived_at': datetime.now(timezone.utc).isoformat(),
+                    'archived_by': reviewer,
+                },
+                'project': cfg,
+            }, f, indent=2)
+
+        # Remove the project directory (which is empty of subjects but may
+        # contain stray files / work-in-progress dirs)
+        pdir = _project_dir(project_id)
+        try:
+            shutil.rmtree(pdir)
+        except Exception as e:
+            self._json_response({'error': f'Failed to remove project directory: {e}'}, 500)
+            return
+
+        _append_project_audit({
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'super_user': reviewer,
+            'action': 'delete_project',
+            'project': project_id,
+            'archive_path': str(archive_path.relative_to(VIEWER_DIR)),
+        })
+        self._json_response({
+            'deleted': project_id,
+            'archivePath': str(archive_path.relative_to(VIEWER_DIR)),
+        })
 
     def _handle_admin_audit_log(self, reviewer, limit):
         """Return audit log entries the super-user is allowed to see, newest

@@ -1,5 +1,6 @@
 # Study data — never commit (contains rankings, processed CT/dose, possibly PHI)
 SITES/
+PROJECTS/
 
 # IDE / editor state
 .claude/
