@@ -1042,6 +1042,13 @@ function parseClinicalGoal(cgNode, structId, objNode, fractionDose) {
   };
 }
 
+// Format a number for display: strips floating-point representation noise
+// (e.g. 115.00000000000001 → 115) while preserving genuine precision
+// (e.g. 0.03 stays 0.03). Used for goal criteria / goal-type labels.
+function cleanNum(n) {
+  return (Math.round(Number(n) * 1e6) / 1e6).toString();
+}
+
 function formatGoalCriteria(obj) {
   const struct = App.templateStructures.find(s => s.id === obj.structId);
   const structName = struct ? struct.name : obj.structId;
@@ -1056,29 +1063,24 @@ function formatGoalCriteria(obj) {
   const dir = obj.qualifier.includes('Less') ? '<' : '>';
 
   if (obj.type === 'DoseVolume') {
-    // "D at V should be < X Gy" or "V at D should be > X%"
+    // "D at V" — dose to a given volume. Threshold may be Gy or % of Rx.
     const volStr = obj.volume.unit === 'Absolute'
-      ? `${obj.volume.value}cc`
-      : `${obj.volume.value}%`;
+      ? `${cleanNum(obj.volume.value)}cc`
+      : `${cleanNum(obj.volume.value)}%`;
     const doseStr = obj.dose.unit === 'Absolute'
-      ? `${obj.dose.value} Gy`
-      : `${obj.dose.value}%`;
-
-    if (obj.qualifier.includes('Less')) {
-      return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
-    } else {
-      return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
-    }
+      ? `${cleanNum(obj.dose.value)} Gy`
+      : `${cleanNum(obj.dose.value)}%`;
+    return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
   }
 
   if (obj.type === 'VolumeDose') {
+    // "V at D" — volume receiving a given dose.
     const doseStr = obj.dose.unit === 'Absolute'
-      ? `${obj.dose.value} Gy`
-      : `${obj.dose.value}%`;
+      ? `${cleanNum(obj.dose.value)} Gy`
+      : `${cleanNum(obj.dose.value)}%`;
     const volStr = obj.volume.unit === 'Absolute'
-      ? `${obj.volume.value}cc`
-      : `${obj.volume.value}%`;
-
+      ? `${cleanNum(obj.volume.value)}cc`
+      : `${cleanNum(obj.volume.value)}%`;
     return { structName, goalType: `V${doseStr}`, criteria: `${dir} ${volStr}` };
   }
 
