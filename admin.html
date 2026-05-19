@@ -320,6 +320,7 @@
     }
     .notification.success { background: var(--green); }
     .notification.error { background: var(--red); }
+    .notification.warn { background: #b88600; }
 
     /* Scrollable table wrapper */
     .table-scroll {
@@ -1041,6 +1042,13 @@ function parseClinicalGoal(cgNode, structId, objNode, fractionDose) {
   };
 }
 
+// Format a number for display: strips floating-point representation noise
+// (e.g. 115.00000000000001 → 115) while preserving genuine precision
+// (e.g. 0.03 stays 0.03). Used for goal criteria / goal-type labels.
+function cleanNum(n) {
+  return (Math.round(Number(n) * 1e6) / 1e6).toString();
+}
+
 function formatGoalCriteria(obj) {
   const struct = App.templateStructures.find(s => s.id === obj.structId);
   const structName = struct ? struct.name : obj.structId;
@@ -1055,29 +1063,24 @@ function formatGoalCriteria(obj) {
   const dir = obj.qualifier.includes('Less') ? '<' : '>';
 
   if (obj.type === 'DoseVolume') {
-    // "D at V should be < X Gy" or "V at D should be > X%"
+    // "D at V" — dose to a given volume. Threshold may be Gy or % of Rx.
     const volStr = obj.volume.unit === 'Absolute'
-      ? `${obj.volume.value}cc`
-      : `${obj.volume.value}%`;
+      ? `${cleanNum(obj.volume.value)}cc`
+      : `${cleanNum(obj.volume.value)}%`;
     const doseStr = obj.dose.unit === 'Absolute'
-      ? `${obj.dose.value} Gy`
-      : `${obj.dose.value}%`;
-
-    if (obj.qualifier.includes('Less')) {
-      return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
-    } else {
-      return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
-    }
+      ? `${cleanNum(obj.dose.value)} Gy`
+      : `${cleanNum(obj.dose.value)}%`;
+    return { structName, goalType: `D${volStr}`, criteria: `${dir} ${doseStr}` };
   }
 
   if (obj.type === 'VolumeDose') {
+    // "V at D" — volume receiving a given dose.
     const doseStr = obj.dose.unit === 'Absolute'
-      ? `${obj.dose.value} Gy`
-      : `${obj.dose.value}%`;
+      ? `${cleanNum(obj.dose.value)} Gy`
+      : `${cleanNum(obj.dose.value)}%`;
     const volStr = obj.volume.unit === 'Absolute'
-      ? `${obj.volume.value}cc`
-      : `${obj.volume.value}%`;
-
+      ? `${cleanNum(obj.volume.value)}cc`
+      : `${cleanNum(obj.volume.value)}%`;
     return { structName, goalType: `V${doseStr}`, criteria: `${dir} ${volStr}` };
   }
 
@@ -1860,9 +1863,40 @@ function extractDoseGrid(dataset) {
 // =============================================================================
 // Clinical Goal Evaluation
 // =============================================================================
-function evaluateClinicalGoals(templateObjectives, planDvhs, roiMapping, commonStructIds) {
+// ---- Clinical-goal unit conversion ------------------------------------------
+// Template goals express dose either as absolute Gy or as a percentage of the
+// prescription (unit "Relative"). Every DVH lookup operates in absolute Gy, so
+// any Relative spec MUST be converted using the subject's prescription dose
+// before it can be evaluated. Skipping this conversion is what caused V100%
+// goals to read 0% on SRS cases — "100" (% of Rx) was being looked up as
+// "100 Gy", far above the actual dose range.
+//
+// Single-prescription model: one Rx per subject. Per-target prescriptions —
+// relevant for multi-lesion SRS where each lesion may be prescribed
+// differently — are a planned future enhancement.
+
+// Convert a goal dose spec { value, unit } to absolute Gy. Returns null when
+// the spec is Relative but no prescription dose is available; the caller
+// treats null as "cannot evaluate this goal yet".
+function goalDoseToGy(spec, rxGy) {
+  if (!spec) return null;
+  if (spec.unit === 'Absolute') return spec.value;          // already Gy
+  if (!rxGy || rxGy <= 0) return null;                      // Relative, no Rx
+  return (spec.value / 100) * rxGy;                         // % of prescription
+}
+
+// Total structure volume in cc — the cumulative-DVH volume at dose 0.
+function structureTotalVolumeCc(dvh) {
+  const cum = buildCumulativeDVH(dvh);
+  if (!cum || cum.length === 0) return 0;
+  return cum[0].volume;
+}
+
+function evaluateClinicalGoals(templateObjectives, planDvhs, roiMapping, commonStructIds, rxGy) {
   // roiMapping: { templateStructId: roiNumber } for this plan
-  // planDvhs: { roiNumber: dvhObj }
+  // planDvhs:   { roiNumber: dvhObj }
+  // rxGy:       subject prescription dose in Gy (null if not yet set) — used
+  //             to resolve %-of-prescription goals into absolute Gy.
   const results = [];
 
   templateObjectives.forEach(obj => {
@@ -1883,40 +1917,59 @@ function evaluateClinicalGoals(templateObjectives, planDvhs, roiMapping, commonS
       return;
     }
 
-    let value = null;
+    let value = null;        // numeric value shown in the plan column
     let status = 'unknown';
 
     if (obj.type === 'DoseVolume') {
-      // Look up dose at a given volume
-      value = lookupDoseAtVolume(dvh, obj.volume.value, obj.volume.unit);
-      if (value !== null) {
-        const goalDose = obj.dose.value;
-        if (obj.qualifier.includes('Less')) {
-          status = value <= goalDose ? 'pass' : 'fail';
-          if (status === 'fail' && obj.acceptableVariation?.dose) {
-            if (value <= obj.acceptableVariation.dose.value) status = 'marginal';
-          }
-        } else {
-          status = value >= goalDose ? 'pass' : 'fail';
-          if (status === 'fail' && obj.acceptableVariation?.dose) {
-            if (value >= obj.acceptableVariation.dose.value) status = 'marginal';
+      // "Dose to a given volume" — e.g. D99%, D0.03cc.
+      // lookupDoseAtVolume returns absolute Gy. The pass/fail threshold may
+      // be absolute Gy or a percent of prescription — both are converted to
+      // Gy and compared in Gy. The displayed value is expressed in the SAME
+      // unit the criteria uses, so the plan column and the criteria column
+      // are directly comparable.
+      const doseAtVolGy = lookupDoseAtVolume(dvh, obj.volume.value, obj.volume.unit);
+      const goalDoseGy = goalDoseToGy(obj.dose, rxGy);
+      if (doseAtVolGy !== null && goalDoseGy !== null) {
+        value = (obj.dose.unit === 'Absolute')
+          ? doseAtVolGy                            // display in Gy
+          : (doseAtVolGy / rxGy) * 100;            // display as % of Rx
+        const lessThan = obj.qualifier.includes('Less');
+        status = (lessThan ? doseAtVolGy <= goalDoseGy : doseAtVolGy >= goalDoseGy)
+          ? 'pass' : 'fail';
+        if (status === 'fail' && obj.acceptableVariation?.dose) {
+          const avGy = goalDoseToGy(obj.acceptableVariation.dose, rxGy);
+          if (avGy !== null &&
+              (lessThan ? doseAtVolGy <= avGy : doseAtVolGy >= avGy)) {
+            status = 'marginal';
           }
         }
       }
     } else if (obj.type === 'VolumeDose') {
-      // Look up volume at a given dose
-      value = lookupVolumeAtDose(dvh, obj.dose.value, obj.dose.unit);
-      if (value !== null) {
-        const goalVol = obj.volume.value;
-        if (obj.qualifier.includes('Less')) {
-          status = value <= goalVol ? 'pass' : 'fail';
-          if (status === 'fail' && obj.acceptableVariation?.volume) {
-            if (value <= obj.acceptableVariation.volume.value) status = 'marginal';
-          }
-        } else {
-          status = value >= goalVol ? 'pass' : 'fail';
-          if (status === 'fail' && obj.acceptableVariation?.volume) {
-            if (value >= obj.acceptableVariation.volume.value) status = 'marginal';
+      // "Volume receiving a given dose" — e.g. V100%.
+      // Convert the dose threshold to absolute Gy, look up the absolute
+      // volume (cc), then express it in the goal's volume unit.
+      const doseGy = goalDoseToGy(obj.dose, rxGy);
+      if (doseGy !== null) {
+        const absVolCc = lookupVolumeAtDose(dvh, doseGy);
+        if (absVolCc !== null) {
+          const totalCc = structureTotalVolumeCc(dvh);
+          const measured = (obj.volume.unit === 'Absolute')
+            ? absVolCc                                               // cc
+            : (totalCc > 0 ? (absVolCc / totalCc) * 100 : null);     // % of struct
+          if (measured !== null) {
+            value = measured;
+            const goalVol = obj.volume.value;   // same unit as obj.volume.unit
+            const lessThan = obj.qualifier.includes('Less');
+            status = (lessThan ? measured <= goalVol : measured >= goalVol)
+              ? 'pass' : 'fail';
+            // acceptableVariation.volume is assumed to share obj.volume.unit
+            // (holds for Eclipse protocol XML in practice).
+            if (status === 'fail' && obj.acceptableVariation?.volume) {
+              const avVol = obj.acceptableVariation.volume.value;
+              if (lessThan ? measured <= avVol : measured >= avVol) {
+                status = 'marginal';
+              }
+            }
           }
         }
       }
@@ -1973,11 +2026,14 @@ function lookupDoseAtVolume(dvh, volumeVal, volumeUnit) {
   return cumDvh[cumDvh.length - 1].dose;
 }
 
-function lookupVolumeAtDose(dvh, doseVal, doseUnit) {
+// Volume (absolute cc) of the structure receiving >= doseGy.
+// doseGy must already be in absolute Gy — callers convert any
+// %-of-prescription (Relative) goal spec via goalDoseToGy() before calling.
+function lookupVolumeAtDose(dvh, doseGy) {
   const cumDvh = buildCumulativeDVH(dvh);
   if (!cumDvh || cumDvh.length === 0) return null;
 
-  const targetDose = doseVal;  // Assume absolute Gy for now
+  const targetDose = doseGy;
 
   // Find volume at target dose
   for (let i = 0; i < cumDvh.length - 1; i++) {
@@ -2741,6 +2797,12 @@ function evaluateAllGoals() {
   const tbody = document.getElementById('goals-tbody');
   tbody.innerHTML = '';
 
+  // Prescription dose (Gy) — needed to resolve %-of-prescription goals
+  // (V100%, D99% > 115%, etc.). May be null if the user hasn't set the
+  // prescription yet (Step 5); in that case relative goals show "N/A" until
+  // the Rx is entered, at which point updateRxTotal() re-runs this function.
+  const rxGy = App.prescriptionDose?.totalDoseGy ?? null;
+
   // Build ROI number mapping for each plan
   const planResults = {};
 
@@ -2758,10 +2820,20 @@ function evaluateAllGoals() {
     });
 
     const results = evaluateClinicalGoals(
-      App.templateObjectives, d.dvhs, roiMapping, App.commonStructures
+      App.templateObjectives, d.dvhs, roiMapping, App.commonStructures, rxGy
     );
     planResults[folder] = results;
   });
+
+  // If the prescription isn't set yet, %-of-prescription goals can't be
+  // evaluated. Surface this rather than letting them silently read "N/A".
+  if (rxGy === null) {
+    App.notify(
+      'Prescription dose not set — %-of-prescription goals (e.g. V100%, ' +
+      'D99% > 115%) show N/A. Set the prescription in Step 5 to evaluate them.',
+      'warn'
+    );
+  }
 
   // Group by priority and display
   const allPriorities = new Set();
@@ -2908,6 +2980,15 @@ function updateRxTotal() {
   } else {
     document.getElementById('rx-total').value = '—';
     App.prescriptionDose = null;
+  }
+
+  // The clinical-goals step (Step 4) runs before the prescription step
+  // (Step 5). If goals were already evaluated, re-run them now so that
+  // %-of-prescription goals (V100%, D99% > 115%, etc.) pick up the new Rx.
+  // Guard: only re-run once the goals panel exists (mapping has been applied).
+  const goalsPanel = document.getElementById('panel-goals');
+  if (App.templateObjectives && goalsPanel && !goalsPanel.classList.contains('hidden')) {
+    evaluateAllGoals();
   }
 }
 document.getElementById('rx-fx-dose').addEventListener('input', updateRxTotal);
