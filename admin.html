@@ -1084,6 +1084,14 @@ function formatGoalCriteria(obj) {
     return { structName, goalType: `V${doseStr}`, criteria: `${dir} ${volStr}` };
   }
 
+  if (obj.type === 'MeanDose') {
+    // Mean dose to the structure. Threshold may be Gy or % of Rx.
+    const doseStr = obj.dose.unit === 'Absolute'
+      ? `${cleanNum(obj.dose.value)} Gy`
+      : `${cleanNum(obj.dose.value)}%`;
+    return { structName, goalType: 'Mean Dose', criteria: `${dir} ${doseStr}` };
+  }
+
   return { structName, goalType: obj.type, criteria: JSON.stringify(obj) };
 }
 
@@ -1973,6 +1981,32 @@ function evaluateClinicalGoals(templateObjectives, planDvhs, roiMapping, commonS
           }
         }
       }
+    } else if (obj.type === 'MeanDose') {
+      // Mean dose to the structure. The DICOM DVH carries the mean dose
+      // directly as the DVHMeanDose tag (parsed into dvh.meanDose by
+      // extractDVH) — no curve integration needed. The pass/fail threshold
+      // may be absolute Gy or a percent of prescription; compare in Gy.
+      // The displayed value is shown in the SAME unit the criteria uses.
+      const meanGy = dvh.meanDose;
+      const goalDoseGy = goalDoseToGy(obj.dose, rxGy);
+      if (meanGy != null && goalDoseGy !== null) {
+        value = (obj.dose.unit === 'Absolute')
+          ? meanGy                          // display in Gy
+          : (meanGy / rxGy) * 100;          // display as % of Rx
+        const lessThan = obj.qualifier.includes('Less');
+        status = (lessThan ? meanGy <= goalDoseGy : meanGy >= goalDoseGy)
+          ? 'pass' : 'fail';
+        if (status === 'fail' && obj.acceptableVariation?.dose) {
+          const avGy = goalDoseToGy(obj.acceptableVariation.dose, rxGy);
+          if (avGy !== null &&
+              (lessThan ? meanGy <= avGy : meanGy >= avGy)) {
+            status = 'marginal';
+          }
+        }
+      }
+      // meanGy == null (DVH lacks DVHMeanDose) or goalDoseGy == null
+      // (relative threshold, no prescription set) → value/status stay
+      // null/'unknown' → row shows N/A, consistent with other goal types.
     } else if (obj.type === 'ConformityIndex') {
       // Skip CI for now - requires additional data
       value = null;
